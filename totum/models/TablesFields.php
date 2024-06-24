@@ -54,6 +54,12 @@ class TablesFields extends Model
             if ($this->getPrepared(['table_name' => $oldRow['table_name']['v'], 'name' => $name])) {
                 throw new errorException($this->translate('The [[%s]] field is already present in the [[%s]] table.', [$name, $oldRow['table_name']['v']]));
             }
+            if (in_array($name, Model::serviceFields) || in_array($name,
+                    Model::RESERVED_WORDS)) {
+                throw new errorException($this->translate('[[%s]] cannot be a field name. Choose another name.',
+                    $name));
+            }
+
             $tableRow = $this->Totum->getTableRow($oldRow['table_name']['v']);
 
             if ($oldRow['category']['v'] === 'column' && Totum::isRealTable($tableRow)) {
@@ -126,7 +132,7 @@ class TablesFields extends Model
         $category = $decodedVars['category'];
 
         if ($this->fieldExits($decodedVars['table_id'], $decodedVars['name'], $decodedVars['version'])) {
-            throw new errorException($this->translate('The [[%s]] field is already present in the [[%s]] table.', [$name, $decodedVars['table_id']]));
+            throw new errorException($this->translate('The [[%s]] field is already present in the [[%s]] table.', [$name, $decodedVars['table_name']]));
         }
 
         /*$this->checkParams($vars, $tableRowId);*/

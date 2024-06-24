@@ -27,7 +27,7 @@ use totum\tableTypes\tmpTable;
  */
 class Totum
 {
-    public const VERSION = '3.5.44.0';
+    public const VERSION = '4.11.57.0';
 
 
     public const TABLE_CODE_PARAMS = ['row_format', 'table_format', 'on_duplicate', 'default_action'];
@@ -77,6 +77,7 @@ class Totum
     protected $CalculateLog;
     protected $fieldObjectsCachesVar;
     protected array $orderFieldCodeErrors = [];
+    protected array $creatorWarnings = [];
 
 
     /**
@@ -107,7 +108,18 @@ class Totum
         $this->orderFieldCodeErrors[$Table->getTableRow()['name']][$nameVar] = 1;
     }
 
-    
+    public function addCreatorWarnings($warningText)
+    {
+        $this->creatorWarnings[$warningText] = 1;
+    }
+
+    public function getCreatorWarnings()
+    {
+       return $this->creatorWarnings;
+    }
+
+
+
     public function getMessenger()
     {
         return $this->Messenger = $this->Messenger ?? new TotumMessenger();
@@ -345,9 +357,9 @@ class Totum
         $this->interfaceLinks[] = ['uri' => $uri, 'target' => $target, 'title' => $title, 'postData' => $postData, 'width' => $width, 'refresh' => $refresh, 'elseData' => $elseData];
     }
 
-    public function addLinkPanel($link, $id, $field, $refresh)
+    public function addLinkPanel($link, $id, $field, $refresh, $fields = [], $columns = null, $titles = [])
     {
-        $this->panelLinks[] = ['uri' => $link, 'id' => $id, 'field' => $field, 'refresh' => $refresh];
+        $this->panelLinks[] = ['uri' => $link, 'id' => $id, 'field' => $field, 'refresh' => $refresh, 'fields' => $fields, 'columns' => $columns, 'titles' => $titles];
     }
 
     /* Сюда можно будет поставить общую систему кешей */

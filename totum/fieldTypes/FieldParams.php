@@ -10,6 +10,7 @@ namespace totum\fieldTypes;
 
 use totum\common\Auth;
 use totum\common\calculates\Calculate;
+use totum\common\criticalErrorException;
 use totum\common\errorException;
 use totum\common\Field;
 use totum\common\Lang\RU;
@@ -33,7 +34,8 @@ class FieldParams extends Field
         parent::addViewValues($viewType, $valArray, $row, $tbl);
         switch ($viewType) {
             case 'csv':
-                throw new errorException($this->translate('Export via csv is not available for [[%s]] field.', 'FieldParams'));
+                throw new errorException($this->translate('Export via csv is not available for [[%s]] field.',
+                    'FieldParams'));
                 break;
             case 'web':
                 $valArray['v'] = $this->translate('Settings field.');
@@ -42,6 +44,11 @@ class FieldParams extends Field
 
                 break;
         }
+    }
+
+    protected function getDefaultValue()
+    {
+        return json_decode('{"type":{"Val":"string", "isOn": true}}', true);
     }
 
     public function getValueFromCsv($val)
@@ -92,22 +99,47 @@ class FieldParams extends Field
         /*$val = json_decode('{"type": {"Val": "fieldParamsResult", "isOn": true}, "width": {"Val": 250, "isOn": true}, "showInWeb": {"Val": false, "isOn": true}}',
             true);*/
 
-        if (empty($val['type']['Val'])) {
-            throw new errorException($this->translate('Fill in the parameter [[%s]].', 'type'));
+        $category = $row['category']['v'];
+        if ($row['table_id']['v']) {
+            $tableRow = $this->table->getTotum()->getTableRow($row['table_id']['v']);
+            if ($category === 'footer' && !is_subclass_of(
+                    Totum::getTableClass($tableRow),
+                    JsonTables::class
+                )) {
+                throw new criticalErrorException($this->translate('You cannot create a [[footer]] field for [[non-calculated]] tables.'));
+            }
         }
 
-        $category = $row['category']['v'];
-        $tableRow = $this->table->getTotum()->getTableRow($row['table_id']['v']);
+        if (empty($val['type']['Val'])) {
+            if (!$isCheck) {
+                throw new criticalErrorException($this->translate('Fill in the parameter [[%s]].', 'type'));
+            }
+            throw new errorException($this->translate('Fill in the parameter [[%s]].', 'type'));
+        } elseif (!$isCheck) {
+            if ($row['category']['v'] === 'filter' && in_array($val['type']['Val'],
+                    ['link', 'text', 'comments', 'file', 'password', 'chart', 'uniq'])) {
+                throw new criticalErrorException($this->translate('The field type %s cannot be in the pre-filter',
+                    $val['type']['Val']));
+            }
+
+        }
+
 
         if ($val['type']['Val'] === 'text') {
             $val['viewTextMaxLength']['Val'] = (int)$val['viewTextMaxLength']['Val'];
+        } elseif (!$isCheck && $val['type']['Val'] === 'number' && ($val['dectimalPlaces']['Val'] ?? 0) > 10) {
+            throw new criticalErrorException($this->translate('Max value of %s is %s.', ['dectimalPlaces', '10']));
+        } elseif (!$isCheck && $val['type']['Val'] === 'number' && ($val['dectimalPlaces']['Val'] ?? 0) < 0) {
+            throw new criticalErrorException($this->translate('Min value of %s is %s.', ['dectimalPlaces', '0']));
         }
 
-        if ($category === 'footer' && !is_subclass_of(
-            Totum::getTableClass($tableRow),
-            JsonTables::class
-        )) {
-            throw new errorException($this->translate('You cannot create a [[footer]] field for [[non-calculated]] tables.'));
+        if ($row['name']['v'] === 'tree' && $row['category']['v'] === 'column' && ($val['treeViewType']['isOn'] ?? false) === true && $val['type']['Val'] === 'tree') {
+            $val['multiple']['isOn'] = false;
+            $val['multiple']['Val'] = false;
+            $val['codeSelectIndividual']['isOn'] = false;
+            $val['codeSelectIndividual']['Val'] = false;
         }
+
+
     }
 }

@@ -17,9 +17,11 @@ use totum\common\Totum;
 
 class AuthController extends interfaceController
 {
-    public function action(ServerRequestInterface $request){
+    public function action(ServerRequestInterface $request)
+    {
         die('Path is not available');
     }
+
     public function actionLogin(ServerRequestInterface $request)
     {
         $post = $request->getParsedBody();
@@ -67,23 +69,39 @@ class AuthController extends interfaceController
             $getNewPass = function () {
                 $letters = 'abdfjhijklmnqrstuvwxz';
                 return $letters[mt_rand(0, strlen($letters) - 1)] . $letters[mt_rand(
-                    0,
-                    strlen($letters) - 1
-                )] . str_pad(mt_rand(1, 9999), 4, 0);
+                        0,
+                        strlen($letters) - 1
+                    )] . str_pad(mt_rand(1, 9999), 4, 0);
             };
 
-            if (empty($post['login'])) {
+            if (empty($post['login']) || is_array($post['login'])) {
                 return ['error' => $this->translate('Fill in the Login/Email field')];
             }
+
+
 
             if (empty($post['recover'])) {
                 if (empty($post['pass'])) {
                     return ['error' => $this->translate('Fill in the Password field')];
                 }
-                switch (Auth::passwordCheckingAndProtection($post['login'], $post['pass'], $userRow, $this->Config, 'web')) {
+                switch (Auth::passwordCheckingAndProtection($post['login'],
+                    $post['pass'],
+                    $userRow,
+                    $this->Config,
+                    'web')) {
                     case Auth::$AuthStatuses['OK']:
                         Auth::webInterfaceSetAuth($userRow['id']);
-                        $this->location($_GET['from'] ?? null, !key_exists('from', $_GET));
+
+                        $baseDir = $this->Config->getBaseDir();
+
+                        if (in_array(1, $userRow['roles'])) {
+                            $schema = is_callable([$this->Config, 'setHostSchema']) ? '"' . $this->Config->getSchema() . '"' : '';
+                            `cd {$baseDir} && bin/totum check-service-notifications {$schema} &`;
+                        }
+
+                        $this->location($_GET['from'] && $_GET['from'] !== '/' ? $_GET['from'] : Auth::getUserById($this->Config,
+                            $userRow['id'])->getUserStartPath(),
+                            !key_exists('from', $_GET));
                         break;
                     case Auth::$AuthStatuses['WRONG_PASSWORD']:
                         return ['error' => $this->translate('Password is not correct')];
@@ -119,7 +137,7 @@ class AuthController extends interfaceController
                     } catch (Exception $e) {
                         Auth::webInterfaceRemoveAuth();
 
-                        return ['error' => $this->translate('Letter has not been sent: %s', $e->getMessage()) ];
+                        return ['error' => $this->translate('Letter has not been sent: %s', $e->getMessage())];
                     }
                 } else {
                     return ['error' => $this->translate('The user with the specified Login/Email was not found')];
@@ -149,4 +167,5 @@ class AuthController extends interfaceController
         $this->location();
         die;
     }
+
 }

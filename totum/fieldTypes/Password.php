@@ -8,20 +8,34 @@
 
 namespace totum\fieldTypes;
 
+use totum\common\errorException;
 use totum\common\Field;
 
 class Password extends Field
 {
     public function getModifiedLogValue($val)
     {
-        return "---";
+        return '---';
     }
+
     public function getLogValue($val, $row, $tbl = [])
     {
-        return "---";
+        return '---';
     }
+
+    public function getFullValue($val, $rowId = null)
+    {
+        return '---';
+    }
+
     public function addViewValues($viewType, array &$valArray, $row, $tbl = [])
     {
+
+        if ($viewType === 'web') {
+            if (is_array($valArray['v'])) {
+                $valArray['e'] = $this->translate('Field data type error');
+            }
+        }
         if ($viewType !== 'edit') {
             $valArray['v'] = '';
         }
@@ -37,6 +51,9 @@ class Password extends Field
 
     protected function checkValByType(&$val, $row, $isCheck = false)
     {
+        if (is_array($val)) {
+            $val = '';
+        }
         if (!$isCheck && strlen($val) !== 32) {
             $val = md5($val);
         }

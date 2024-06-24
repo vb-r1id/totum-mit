@@ -15,10 +15,12 @@ class WriteTableActions extends ReadTableActions
 {
     public function checkUnic()
     {
-        if($this->Table->isField('visible', 'web', $fieldName = ($this->post['fieldName'] ?? '')) && $this->Table->getFields()[$fieldName]['type']==='unic'){
+        if ($this->Table->isField('visible',
+                'web',
+                $fieldName = ($this->post['fieldName'] ?? '')) && $this->Table->getFields()[$fieldName]['type'] === 'unic') {
             return $this->Table->checkUnic($fieldName, $this->post['fieldVal'] ?? '');
         }
-        throw new errorException($fieldName.' is not field of type unique');
+        throw new errorException($fieldName . ' is not field of type unique');
     }
 
     public function add()
@@ -44,7 +46,8 @@ class WriteTableActions extends ReadTableActions
             $data = json_decode($this->post['data'], true);
         }
 
-        return $this->modify(['add' => $data ?? $this->post['hash'] ?? 'new cycle', 'addAfter' => $this->post['insertAfter'] ?? null]);
+        return $this->modify(['add' => $data ?? $this->post['hash'] ?? 'new cycle', 'addAfter' => $this->post['insertAfter'] ?? null],
+            json_decode($this->post['fields'] ?? '[]', true));
     }
 
     public function tmpFileUpload()
@@ -71,60 +74,75 @@ class WriteTableActions extends ReadTableActions
     public function checkInsertRow()
     {
         if (empty($this->post['hash'])) {
-            do {
-                $hash = 'i-' . md5(microtime(true) . rand());
-            } while (!TmpTables::init($this->Totum->getConfig())->saveByHash(
+            $hash = TmpTables::init($this->Totum->getConfig())->getNewHash(
                 TmpTables::SERVICE_TABLES['insert_row'],
                 $this->User,
-                $hash,
                 [],
-                true
-            ));
+                'i'
+            );
         } else {
             $hash = $this->post['hash'];
         }
-
+        $onlyFields = json_decode($this->post['fields'] ?? '[]', true);
+        if (empty($onlyFields)) {
+            $onlyFields = null;
+        }
         $data = ['rows' => [$this->getInsertRow($hash,
             json_decode($this->post['data'], true),
             $this->post['tableData'] ?? [],
             $this->post['clearField'] ?? null)]];
 
-        $data = $this->Table->getValuesAndFormatsForClient($data, 'edit', []);
+        $rawRow = $data['rows'][0];
+        $data = $this->Table->getValuesAndFormatsForClient($data, 'edit', [], fieldNames: $onlyFields);
         $res = ['row' => $data['rows'][0], 'hash' => $hash];
-        $this->addLoadedSelects($res);
+        $res['selects'] = $this->getSelectsForLoading($res['row'], $rawRow, 'insertable');
         return $res;
     }
 
     public function checkEditRow()
     {
-        $editData = json_decode($this->post['data'], true) ?? [];
-        $data = ['id' => $editData['id'] ?? 0];
-        $dataSetToDefault = [];
 
-        foreach ($editData as $k => $v) {
-            if (is_array($v) && array_key_exists('v', $v)) {
-                if (array_key_exists('h', $v)) {
-                    if ($v['h'] === false) {
-                        $dataSetToDefault[$k] = true;
-                        continue;
-                    }
-                }
-                $data[$k] = $v['v'];
+        if (empty($this->post['hash'])) {
+            if (!empty($this->post['loadSelects'])) {
+                $hash = TmpTables::init($this->Totum->getConfig())->getNewHash(
+                    TmpTables::SERVICE_TABLES['edit_row'],
+                    $this->User,
+                    [],
+                    'e'
+                );
             }
+        } else {
+            $hash = $this->post['hash'];
         }
 
-        $row = $this->Table->checkEditRow($data, $dataSetToDefault, $this->post['tableData'] ?? []);
-        $res['row'] = $this->Table->getValuesAndFormatsForClient(['rows' => [$row]], 'edit', [])['rows'][0];
-        $res['f'] = $this->getTableFormat([]);
-        $this->addLoadedSelects($res);
-
+        if ($hash ?? null) {
+            $row = $this->getEditRow($hash,
+                json_decode($this->post['data'], true),
+                $this->post['tableData'] ?? []);
+            $res['hash'] = $hash;
+            $res['f'] = $this->getTableFormat([]);
+        } else {
+            $editData = json_decode($this->post['data'], true) ?? [];
+            $row = $this->Table->checkEditRow($editData, $this->post['tableData'] ?? []);
+        }
+        $onlyFields = json_decode($this->post['fields'] ?? '[]', true);
+        if (empty($onlyFields)) {
+            $onlyFields = null;
+        }
+        $rawRow = $row;
+        $res['row'] = $this->Table->getValuesAndFormatsForClient(['rows' => [$row]],
+            'edit',
+            [],
+            fieldNames: $onlyFields)['rows'][0];
+        $res['selects'] = $this->getSelectsForLoading($res['row'], $rawRow, 'editable');
         return $res;
     }
 
     public function saveEditRow()
     {
         $data = json_decode($this->post['data'], true) ?? [];
-        return $this->modify(['modify' => [$data['id'] => $data ?? []]]);
+        return $this->modify(['modify' => [$data['id'] => $data ?? []]],
+            json_decode($this->post['fields'] ?? '[]', true));
     }
 
     public function csvImport()
@@ -144,6 +162,31 @@ class WriteTableActions extends ReadTableActions
             return $r;
         } else {
             throw new errorException($this->translate('You do not have access to csv-import in this table'));
+        }
+    }
+
+    public function excelImport()
+    {
+        if ($this->isTableServiceOn('xlsximport')) {
+            $calc = new CalculateAction(<<<CODE
+= : linkToFileUpload(title: $#title; code: \$code; limit: 1; type: ".xlsx"; var: "title" = $#title; var: 'table'=$#table; var: 'width'=$#width;  refresh: true)
+```code:totum
+=: linkToDataTable(table: 'ttm__prepared_data_import'; title: $#title; width: \$width; params: \$params;  target: "iframe"; refresh: true; bottombuttons: 'force')
+params: rowCreate(field: "h_import_data" = \$fileData; field: "h_table" = $#table; field: "h_iscolumnsinfirstrow"=true)
+width: if(condition: \$columnsWidth > $#width; then: "80wv"; else: \$columnsWidth)
+    ~columnsWidth: listCount(list: \$fileData[0]) * 100 + 100
+~fileData: serviceXlsxParser(filestring: $#input[0][filestring]; withformats: false; withcolumns: true)
+```
+CODE
+            );
+            $calc->execAction('CODE', [], [], [], [], $this->Table, 'exec', [
+                'title' => $this->translate('Excel import to %s', $this->post['title']),
+                'table' => $this->Table->getTableRow()['name'],
+                'width' => 0.8 * $this->post['bwidth']
+            ]);
+
+        } else {
+            throw new errorException($this->translate('There is no access to excel-import in this table'));
         }
     }
 
@@ -212,30 +255,79 @@ class WriteTableActions extends ReadTableActions
 
     public function selectSourceTableAction()
     {
+
+
+        if (str_starts_with($this->post['data'],
+            'e-')) {
+            $itemData = $this->getEditRow($this->post['data'], [], []);
+        } elseif (str_starts_with($this->post['data'],
+            'i-')) {
+            $itemData = $this->getInsertRow($this->post['data']);
+        } else {
+            $itemData = json_decode($this->post['data'], true) ?? [];
+        }
         $this->Table->selectSourceTableAction(
             $this->post['field_name'],
-            json_decode($this->post['data'], true) ?? []
+            $itemData,
+            ($this->post['isPlus'] ?? false) === 'true'
         );
         return ['ok' => true];
     }
 
-    protected function addLoadedSelects(array &$res)
+    /**
+     * @param array $rowWithFormats
+     * @param array $rawRow
+     * @param string $editType editable,insertable
+     * @return array
+     * @throws errorException
+     */
+    protected function getSelectsForLoading(array $rowWithFormats, array $rawRow, string $editType): array
     {
         if (!empty($this->post['loadSelects'])) {
             $selects = [];
             foreach ($this->Table->getSortedFields()['column'] as $field) {
-                if ($field['type'] === 'select' && $this->Table->isField('editable', 'web', $field)) {
-                    if (($res['row'][$field['name']]['f']['block'] ?? false) != true) {
+                if ($field['type'] === 'select' && $this->Table->isField($editType, 'web', $field)) {
+                    if (($rowWithFormats[$field['name']]['f']['block'] ?? false) != true) {
                         if ($this->post['loadSelects'] === 'all' || ($field['codeSelectIndividual'] ?? false)) {
-                            $item = $res['row'];
+                            $item = $rawRow;
                             $item = array_map(fn($x) => is_array($x) && key_exists('v', $x) ? $x['v'] : $x, $item);
-                            $selects[$field['name']] = $this->getEditSelect(['field' => $field['name'], 'item' => $item]);
+                            $selects[$field['name']] = $this->getEditSelect(['field' => $field['name'], 'item' => $item],
+                                null,
+                                null,
+                                true);
                         }
                     }
                 }
             }
-            $res['selects'] = $selects;
+            return $selects;
         }
+        return [];
+    }
+
+    protected
+    function getEditRow(string $hash, array $editData, array $tableData)
+    {
+        $this->Table->reCalculateFilters(
+            'web',
+            false,
+            false,
+            ['params' => $this->getPermittedFilters($this->Request->getParsedBody()['filters'] ?? '')]
+        );
+
+        $loadData = TmpTables::init($this->Totum->getConfig())->getByHash(
+            TmpTables::SERVICE_TABLES['edit_row'],
+            $this->User,
+            $hash
+        ) ?? [];
+
+        $summData = array_merge($loadData, $editData);
+        TmpTables::init($this->Totum->getConfig())->saveByHash(
+            TmpTables::SERVICE_TABLES['edit_row'],
+            $this->User,
+            $hash,
+            $summData
+        );
+        return $this->Table->checkEditRow($summData, $tableData);
     }
 
 }

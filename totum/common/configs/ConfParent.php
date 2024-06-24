@@ -13,8 +13,9 @@ namespace totum\common\configs;
 use totum\common\calculates\CalculateAction;
 use totum\common\errorException;
 use totum\common\Lang\LangInterface;
-use totum\common\Lang\RU;
 use totum\common\logs\Log;
+use totum\common\Services\Services;
+use totum\common\Services\ServicesVarsInterface;
 use totum\common\sql\Sql;
 use totum\common\sql\SqlException;
 use totum\common\Totum;
@@ -39,6 +40,7 @@ abstract class ConfParent
 
 
     protected $execSSHOn = false;
+    protected $checkSSl = false;
 
     const LANG = '';
 
@@ -82,7 +84,7 @@ abstract class ConfParent
     protected $Lang;
 
 
-    /** @noinspection PhpNewClassMissingParameterListInspection */
+
     public function __construct($env = self::ENV_LEVELS['production'])
     {
         $this->mktimeStart = microtime(true);
@@ -107,9 +109,14 @@ abstract class ConfParent
 
     }
 
+    public function isCheckSsl(): bool
+    {
+        return $this->checkSSl;
+    }
+
     public function getDefaultSender()
     {
-        return 'no-reply@' . $this->getFullHostName();
+        return $this->getSettings('default_email') ?? 'no-reply@' . $this->getFullHostName();
     }
 
     public function setSessionCookieParams()
@@ -117,7 +124,7 @@ abstract class ConfParent
         session_set_cookie_params([
             'path' => '/',
             'httponly' => true,
-            'samesite' => 'Strict'
+            'samesite' => 'Lax'
         ]);
     }
 
@@ -201,9 +208,23 @@ abstract class ConfParent
         return $this->hostName;
     }
 
+    public function getMainHostName()
+    {
+        return $this->hostName;
+    }
+
     public function getFilesDir()
     {
         return $this->baseDir . 'http/fls/';
+    }
+
+    public function getCryptKeyFileContent()
+    {
+        $fName = $this->getBaseDir() . 'Crypto.key';
+        if (!file_exists($fName)) {
+            throw new errorException($this->translate('Crypto.key file not exists'));
+        }
+        return file_get_contents($fName);
     }
 
 
@@ -215,9 +236,13 @@ abstract class ConfParent
     /**
      * @return bool
      */
-    public function isExecSSHOn(): bool
+    public function isExecSSHOn(bool|string $type): bool
     {
-        return $this->execSSHOn;
+        return match ($type) {
+            true => $this->execSSHOn === true,
+            'inner' => $this->execSSHOn === true || $this->execSSHOn === 'inner',
+            default => false
+        };
     }
 
 
@@ -227,18 +252,35 @@ abstract class ConfParent
     {
         $attachments = [];
         foreach ($attachmentsIn as $k => $v) {
-            if (!preg_match('/.+\.[a-zA-Z]{2,5}$/', $k)) {
-                $attachments[preg_replace('`.*?/([^/]+\.[^/]+)$`', '$1', $v)] = $v;
-            } else {
-                $attachments[$k] = $v;
+            $filestring = null;
+            $fileName = null;
+            if (is_array($v)) {
+                $fileName = $v['name'] ?? throw new errorException($this->translate('Not correct row in files list'));
+
+                if (!empty($v['file'])) {
+                    $v = $v['file'];
+                } elseif (!empty($v['filestring'])) {
+                    $filestring = $v['filestring'];
+                } else {
+                    throw new errorException($this->translate('Not correct row in files list'));
+                }
             }
-            $attachments[$k] = File::getFilePath($v, $this);
+
+            $filestring = $filestring ?? File::getContent($v, $this);
+            if (!$fileName) {
+                if (!preg_match('/.+\.[a-zA-Z0-9]+$/', $k)) {
+                    $fileName = preg_replace('`([^/]+\.[^/]+)$`', '$1', $v);
+                } else {
+                    $fileName = $k;
+                }
+            }
+            $attachments[$fileName] = $filestring;
         }
 
         $body = preg_replace_callback(
             '~src\s*=\s*([\'"]?)(?:http(?:s?)://' . $this->getFullHostName() . ')?/fls/(.*?)\1~',
             function ($matches) use (&$attachments) {
-                if (!empty($matches[2]) && $file = File::getFilePath($matches[2], $this)) {
+                if (!empty($matches[2]) && $file = File::getContent($matches[2], $this)) {
                     $md5 = md5($matches[2]) . '.' . preg_replace('/.*\.([a-zA-Z]{2,5})$/', '$1', $matches[2]);
                     $attachments[$md5] = $file;
                     return 'src="cid:' . $md5 . '"';
@@ -410,10 +452,11 @@ abstract class ConfParent
     public function getCalculateExtensionFunction($funcName)
     {
         $this->getObjectWithExtFunctions();
-        if (!method_exists($this->CalculateExtensions, $funcName)) {
-            throw new errorException($this->translate('Function [[%s]] is not found.', $funcName));
+        if (method_exists($this->CalculateExtensions, $funcName) || (property_exists($this->CalculateExtensions,
+                    $funcName) && is_callable($this->CalculateExtensions->$funcName))) {
+            return $this->CalculateExtensions->$funcName;
         }
-        return $this->CalculateExtensions->$funcName;
+        throw new errorException($this->translate('Function [[%s]] is not found.', $funcName));
     }
 
     public function getExtFunctionsTemplates()
@@ -424,6 +467,7 @@ abstract class ConfParent
 
     public function getObjectWithExtFunctions()
     {
+        ;
         if (!$this->CalculateExtensions) {
             if (file_exists($fName = dirname((new \ReflectionClass($this))->getFileName()) . '/CalculateExtensions.php')) {
                 include($fName);
@@ -435,7 +479,13 @@ abstract class ConfParent
 
     public function getLang()
     {
-        return static::LANG;
+        $array = explode('\\', $this->Lang::class);
+        return strtolower(end($array));
+    }
+
+    public function getServicesVarObject(): ServicesVarsInterface
+    {
+        return Services::init($this);
     }
 
     protected function setLogIni()
@@ -725,6 +775,22 @@ SQL
     public function getHiddenHosts(): array
     {
         return [];
+    }
+
+    public function setHiddenHostSettings(array $Settings)
+    {
+        if (!empty($Settings['lang'])) {
+            if (!class_exists('totum\\common\\Lang\\' . strtoupper($Settings['lang']))) {
+                throw new \Exception('Specified ' . $Settings['lang'] . ' language is not supported');
+            }
+            $this->Lang = new ('totum\\common\\Lang\\' . strtoupper($Settings['lang']))();
+        }
+    }
+
+    protected array $techTables = ['ttm__prepared_data_import'];
+
+    public function isTechTable(string $name){
+        return in_array($name, $this->techTables);
     }
 
 }

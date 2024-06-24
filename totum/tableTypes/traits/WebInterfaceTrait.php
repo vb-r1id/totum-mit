@@ -64,7 +64,8 @@ trait WebInterfaceTrait
             ]
         );
         $oldUpdated = $this->updated;
-        $this->isTblUpdated(0);
+        $this->isTblUpdated(0, function () {
+        });
         if ($oldUpdated !== $this->updated) {
             $table['updated'] = $this->updated;
         }
@@ -97,6 +98,7 @@ trait WebInterfaceTrait
         ob_start();
         $out = fopen('php://output', 'w');
         foreach ($csv as $fields) {
+
             fputcsv($out, $fields, ';', '"', '\\');
         }
         fclose($out);
@@ -108,7 +110,6 @@ trait WebInterfaceTrait
     {
         $inVars = [];
 
-        $modify = $data['modify'] ?? [];
         $remove = $data['remove'] ?? [];
         $restore = $data['restore'] ?? [];
 
@@ -120,7 +121,6 @@ trait WebInterfaceTrait
         $this->checkTableUpdated($tableData);
 
 
-        $inVars['modify'] = [];
         $inVars['add'] = [];
         if (!empty($data['add'])) {
             if ($data['add'] === 'new cycle') {
@@ -139,19 +139,16 @@ trait WebInterfaceTrait
 
         $inVars['channel'] = $data['channel'] ?? 'web';
 
-        if (!empty($modify['setValuesToDefaults'])) {
-            unset($modify['setValuesToDefaults']);
-            $inVars['setValuesToDefaults'] = $modify;
-        } else {
-            $inVars['modify'] = $modify;
-        }
+        $inVars['setValuesToDefaults'] = $data['setValuesToDefaults'] ?? [];
+
+        $inVars['modify'] = $data['modify'] ?? [];
         $inVars['remove'] = $remove;
         $inVars['restore'] = $restore;
 
 
         $inVars['duplicate'] = $duplicate;
         if ($inVars['duplicate']) {
-            foreach ($inVars['duplicate']['replaces']??[] as $replaces) {
+            foreach ($inVars['duplicate']['replaces'] ?? [] as $replaces) {
                 foreach ($replaces ?? [] as $k => $v) {
                     if (!$this->isField('visible',
                             'web',
@@ -199,6 +196,7 @@ trait WebInterfaceTrait
         unset($editData);
 
         $Log = $this->calcLog(['name' => 'RECALC', 'table' => $this, 'inVars' => $inVars]);
+
         $this->reCalculate($inVars);
 
         if (!empty($insertRowHash)) {
@@ -208,16 +206,31 @@ trait WebInterfaceTrait
                 $insertRowHash
             );
         }
-        $this->calcLog($Log, 'result', $this->isTblUpdated(0) ? 'changed' : 'not changed');
+        $isUpdated = $this->isTblUpdated(0, function ($result) use ($Log) {
+            $this->calcLog($Log, 'result', $result !== false ? ['changed', $result] : 'not changed');
+        });
+        $this->calcLog($Log, 'result', $isUpdated !== false ? ['changed', $isUpdated] : 'not changed');
     }
 
-    public function checkEditRow($data, $dataSetToDefault, $tableData = null)
+    public function checkEditRow($editData, $tableData = null)
     {
+        $data = $dataSetToDefault = [];
+        foreach ($editData as $k => $v) {
+            if (is_array($v) && array_key_exists('v', $v)) {
+                if (array_key_exists('h', $v)) {
+                    if ($v['h'] === false) {
+                        $dataSetToDefault[$k] = true;
+                        continue;
+                    }
+                }
+                $data[$k] = $v['v'];
+            }
+        }
         $this->loadDataRow();
         if ($tableData) {
             $this->checkTableUpdated($tableData);
         }
-        $id = $data['id'] ?? 0;
+        $id = $editData['id'] ?? 0;
         $this->checkIsUserCanViewIds('web', [$id]);
         $this->reCalculate(['channel' => 'web', 'modify' => [$id => $data], 'setValuesToDefaults' => [$id => $dataSetToDefault], 'isCheck' => true]);
 
@@ -577,6 +590,24 @@ trait WebInterfaceTrait
     {
         $csv = [];
 
+        $useThisField = function ($field) use ($visibleFields) {
+            return in_array($field['name'], $visibleFields) && !in_array($field['type'], ['file', 'button', 'chart']);
+        };
+
+        $getAndCheckVal = function ($valArray, $fieldName, $id = null) {
+            if (is_array($valArray['v'])) {
+                $field = $this->fields[$fieldName];
+                if ($id) {
+                    throw new errorException($this->translate('Value format error in id %s row field %s',
+                        [$id, $field['title']]));
+                } else {
+                    throw new errorException($this->translate('Value format error in field %s', $field['title']));
+                }
+
+            }
+            return $valArray['v'];
+        };
+
         $addTop = function () use (&$csv) {
             //Название таблицы
             $csv[] = [$this->tableRow['title']];
@@ -599,25 +630,31 @@ trait WebInterfaceTrait
 
             $csv[] = ['', '', ''];
         };
-        $addRowsByCategory = function ($categoriFields, $categoryTitle) use (&$csv, $visibleFields) {
+
+        $prepareCategoryDataData = function ($categoriFields) use ($useThisField) {
+            $data = [];
+            foreach ($categoriFields as $field) {
+                if (!$useThisField($field)) {
+                    continue;
+                }
+                $data[$field['name']] = $this->tbl['params'][$field['name']];
+            }
+            return $this->getValuesAndFormatsForClient(['params' => $data],
+                'csv',
+                array_keys($this->tbl['rows']))['params'] ?? [];
+        };
+
+        $addRowsByCategory = function ($categoriFields, $categoryTitle) use ($prepareCategoryDataData, $useThisField, $getAndCheckVal, &$csv, $visibleFields) {
             $csv[] = [$categoryTitle];
 
             $paramNames = [];
             $paramValues = [];
             $paramTitles = [];
 
-            foreach ($categoriFields as $field) {
-                if (!in_array($field['name'], $visibleFields)) {
-                    continue;
-                }
-                $valArray = $this->tbl['params'][$field['name']];
-
-                Field::init($field, $this)->addViewValues('csv', $valArray, $this->tbl['params'], $this->tbl);
-                $val = $valArray['v'];
-
-                $paramTitles[] = '' . $field['title'] . '';
-                $paramNames[] = '' . $field['name'] . '';
-                $paramValues[] = '' . $val . '';
+            foreach ($prepareCategoryDataData($categoriFields) as $name => $valArray) {
+                $paramTitles[] = '' . $this->fields[$name]['title'] . '';
+                $paramNames[] = '' . $this->fields[$name]['name'] . '';
+                $paramValues[] = '' . $getAndCheckVal($valArray, $name) . '';
             }
 
             $csv[] = $paramTitles;
@@ -634,7 +671,7 @@ trait WebInterfaceTrait
             $csv[] = [empty($_filters) ? '' : Crypt::getCrypted(json_encode($_filters, JSON_UNESCAPED_UNICODE))];
             $csv[] = ['', '', ''];
         };
-        $addFooter = function ($rowParams) use (&$csv, $addRowsByCategory, $visibleFields) {
+        $addFooter = function ($rowParams) use ($prepareCategoryDataData, $useThisField, $getAndCheckVal, &$csv, $addRowsByCategory, $visibleFields) {
             /******Футеры колонок - только в json-таблицах******/
             if (is_a($this, JsonTables::class)) {
                 $columnsFooters = [];
@@ -663,22 +700,15 @@ trait WebInterfaceTrait
                         if (isset($columnsFooters[$fName][$iFooter])) {
                             $field = $columnsFooters[$fName][$iFooter];
 
-                            if (!in_array($field['name'], $visibleFields)) {
+                            if (!$useThisField($field)) {
                                 continue;
                             }
 
-                            $valArray = $this->tbl['params'][$field['name']];
-                            Field::init($field, $this)->addViewValues(
-                                'csv',
-                                $valArray,
-                                $this->tbl['params'],
-                                $this->tbl
-                            );
-                            $val = $valArray['v'];
+                            $valArray = $prepareCategoryDataData([$this->fields[$field['name']]])[$field['name']];
 
                             $iFooterCsvHead [] = $field['title'];
                             $iFooterCsvName [] = $field['name'];
-                            $iFooterCsvVals [] = $val;
+                            $iFooterCsvVals [] = $getAndCheckVal($valArray, $fName);
                         } else {
                             $iFooterCsvHead [] = '';
                             $iFooterCsvName [] = '';
@@ -695,13 +725,12 @@ trait WebInterfaceTrait
             }
         };
 
-
         /*Определение полей*/
         $paramTitles = [$this->translate('Deleting'), 'id'];
         $paramNames = ['', ''];
         $rowParams = [];
         foreach ($this->getVisibleFields('web', true)['column'] as $k => $field) {
-            if (!in_array($field['name'], $visibleFields)) {
+            if (!$useThisField($field)) {
                 continue;
             }
 
@@ -709,6 +738,22 @@ trait WebInterfaceTrait
             $paramNames[] = $field['name'];
             $rowParams[] = $k;
         }
+
+
+        $prepareRowsData = function () use ($rowParams) {
+            $data = [];
+            foreach ($this->tbl['rows'] as $row) {
+                $_row = ['id' => $row['id']];
+                foreach ($rowParams as $fName) {
+                    $_row[$fName] = $row[$fName];
+                }
+                $data[] = $_row;
+            }
+            return $this->getValuesAndFormatsForClient(['rows' => $data],
+                'csv',
+                array_keys($this->tbl['rows']))['rows'] ?? [];
+        };
+
 
         switch ($type) {
             case 'full':
@@ -727,29 +772,23 @@ trait WebInterfaceTrait
                 $csv[] = $paramTitles;
                 $csv[] = $paramNames;
 
-
-                foreach ($this->tbl['rows'] as $row) {
+                foreach ($prepareRowsData() as $row) {
                     $csvRow = ['', $row['id']];
                     foreach ($rowParams as $fName) {
-                        $valArray = $row[$fName];
-                        Field::init($this->fields[$fName], $this)->addViewValues('csv', $valArray, $row, $this->tbl);
-                        $val = $valArray['v'];
-                        $csvRow [] = $val;
+                        $csvRow [] = $getAndCheckVal($row[$fName], $fName, $row['id']);
                     }
                     $csv[] = $csvRow;
                 }
+
 
                 $addFooter($rowParams);
 
                 break;
             case 'rows':
-                foreach ($this->tbl['rows'] as $row) {
+                foreach ($prepareRowsData() as $row) {
                     $csvRow = [];
                     foreach ($rowParams as $fName) {
-                        $valArray = $row[$fName];
-                        Field::init($this->fields[$fName], $this)->addViewValues('csv', $valArray, $row, $this->tbl);
-                        $val = $valArray['v'];
-                        $csvRow [] = $val;
+                        $csvRow [] = $getAndCheckVal($row[$fName], $fName, $row['id']);
                     }
                     $csv[] = $csvRow;
                 }

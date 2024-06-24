@@ -16,6 +16,7 @@ use totum\common\Lang\LangInterface;
 use totum\common\Lang\RU;
 use totum\common\Model;
 use totum\common\sql\SqlException;
+use totum\models\TmpTables;
 use totum\tableTypes\aTable;
 
 class Calculate
@@ -28,6 +29,7 @@ class Calculate
     use FuncTablesTrait;
     use FuncOperationsTrait;
     use ParsesTrait;
+    use FuncServicesTrait;
 
     protected static $codes;
     protected static $initCodes = [];
@@ -52,7 +54,7 @@ class Calculate
      * @var aTable
      */
     protected $Table;
-    protected $vars;
+    protected $vars = [];
     protected $fixedCodeNames = [];
     protected $fixedCodeVars = [];
     protected $CodeLineParams = [];
@@ -104,6 +106,157 @@ class Calculate
             }
         }
         return $fields;
+    }
+
+    protected function funcSelectRowListForSelect($params)
+    {
+        $params = $this->getParamsArray($params, ['where', 'order'], ['previewscode']);
+        $this->__checkRequiredParams($params, ['field'], 'selectRowListForSelect');
+
+        $params2 = $params;
+        $baseField = $params['bfield'] ?? 'id';
+
+        $params2['field'] = [$params['field'], $baseField, 'is_del'];
+        $params2['sfield'] = [];
+        if (!empty($params['section'])) {
+            $params2['sfield'][] = $params2['section'];
+            unset($params2['section']);
+            $params2['with__sectionFunction'] = true;
+        }
+
+        $rows = $this->select($params2, 'rows');
+
+        $rows = array_map(
+            function ($row) use ($params, $baseField) {
+                $r = ['value' => $row[$baseField]
+                    , 'is_del' => $row['is_del']
+                    , 'title' => $row[$params['field']]];
+
+                if (!empty($params['section'])) {
+                    $r['section'] = $row['__sectionFunction'] ?? $row[$params['section']];
+                }
+                return $r;
+            },
+            $rows
+        );
+
+        if (!empty($params['preview']) || !empty($params['previewscode'])) {
+            $rows['previewdata'] = true;
+        };
+        return $rows;
+    }
+
+    protected function funcSelectRowListForTree($params)
+    {
+        $params = $this->getParamsArray($params, ['where', 'order']);
+
+        $params2 = $params;
+
+        $params['bfield'] = $params['bfield'] ?? 'id';
+
+        $params2['field'] = [$params['field'], $params['bfield'], 'is_del'];
+        $params2['sfield'] = [];
+
+        $this->__checkNotEmptyParams($params, 'parent');
+
+        $this->parentName = $params['parent'];
+        $params2['field'][] = $params['parent'];
+
+        if (key_exists('disabled', $params)) {
+            $this->__checkListParam($params['disabled'], 'disabled');
+            $disabled = array_flip(array_unique($params['disabled']));
+        } else {
+            $disabled = [];
+        }
+
+        $rows = $this->select($params2, 'rows');
+
+        $thisField = $this->Table->getFields()[$this->varName];
+
+        $ParentField = null;
+        $treeListPrep = '';
+        $treeRows = [];
+
+        /* Дополненное дерево - ид папок из другой таблицы */
+        if (empty($thisField['treeAutoTree'])) {
+            $sourceTable = $this->getSourceTable($params);
+
+            if (!$sourceTable) {
+                return [];
+            }
+            $ParentField = Field::init($sourceTable->getFields()[$params['parent']], $sourceTable);
+            if ($ParentField->getData('codeSelectIndividual')) {
+                throw new errorException($this->translate('The [[%s]] parameter must [[not]] be [[%s]].',
+                    [$params['parent'], 'codeSelectIndividual']));
+            } else {
+                $treeListPrep = 'PP/';
+
+                $v = ['v' => $rows[0][$params['parent']] ?? null, '__isForChildTree' => true];
+                $parentList = $rows ? $ParentField->calculateSelectList($v, $rows[0], $sourceTable) : [];
+                unset($parentList['previewdata']);
+
+                if ($ParentField->getData('type') === 'tree') {
+                    foreach ($parentList as $val => $_r) {
+                        $treeRows[] = ['value' => $treeListPrep . $val, 'title' => $_r[0], 'is_del' => $_r['1'], 'parent' => $_r[3] ? $treeListPrep . $_r[3] : null];
+                    }
+                } else {
+                    foreach ($parentList as $val => $_r) {
+                        $treeRows[] = ['value' => $treeListPrep . $val, 'title' => $_r[0], 'is_del' => $_r['1'], 'parent' => null];
+                    }
+                }
+            }
+        }
+        foreach ($rows as $row) {
+            $r = ['value' => $row[$params['bfield']]
+                , 'is_del' => $row['is_del']
+                , 'title' => $row[$params['field']]];
+
+            if (is_array($row[$params['parent']])) {
+                throw new errorException($this->translate('The %s field value should not be an array.',
+                    $params['parent']));
+            }
+
+            $r['parent'] = ($row[$params['parent']] ?? null) ? $treeListPrep . $row[$params['parent']] : null;
+
+            if (key_exists($row[$params['bfield']], $disabled)) {
+                $r['disabled'] = true;
+            }
+            $treeRows[] = $r;
+        }
+
+
+        if (!empty($params['roots'])) {
+            $TreeRowsChildrenIndexed = [];
+            $TreeRowsIndexed = [];
+            $newTreeRows = [];
+
+            foreach ($treeRows as $row) {
+                if ($parent = ($row['parent'] ?? null)) {
+                    $TreeRowsChildrenIndexed[$row['parent']][] = $row;
+                }
+                $TreeRowsIndexed[$row['value']] = $row;
+            }
+            $getChildren = function ($parent) use (&$getChildren, &$newTreeRows, $TreeRowsIndexed, $TreeRowsChildrenIndexed) {
+                if (key_exists($parent, $TreeRowsChildrenIndexed)) {
+                    foreach ($TreeRowsChildrenIndexed[$parent] as $child) {
+                        $newTreeRows[] = $child;
+                        $getChildren($child['value']);
+                    }
+                }
+            };
+            foreach ((array)$params['roots'] as $root) {
+                $root = $treeListPrep . $root;
+                if (key_exists($root, $TreeRowsIndexed)) {
+                    $TreeRowsIndexed[$root]['parent'] = null;
+                    $newTreeRows[] = $TreeRowsIndexed[$root];
+                    $getChildren($root);
+                }
+            }
+            return $newTreeRows;
+        }
+
+
+        return $treeRows;
     }
 
     protected function getConditionsResult(array $params): bool
@@ -315,6 +468,9 @@ class Calculate
         if (is_array($dateFromParams)) {
             throw new errorException($Lang->translate('There should be a date, not a list.'));
         }
+        if (is_bool($dateFromParams)) {
+            return null;
+        }
         $dateFromParams = strval($dateFromParams);
         if ($dateFromParams !== '') {
             if (is_numeric($dateFromParams)) {
@@ -333,7 +489,7 @@ class Calculate
         return null;
     }
 
-    protected function getCodes($stringIN)
+    protected function getCodes($stringIN, array $spesialSections = [])
     {
         $cacheString =& self::$codes;
 
@@ -341,7 +497,16 @@ class Calculate
             $cacheString = &$this->cachedCodes;
         }*/
 
-        if (empty($cacheString[$stringIN])) {
+        if ($spesialSections) {
+            $spesialSections = '|(?<as>\b' . implode('\b|\b', $spesialSections) . '\b)';
+        } else {
+            $spesialSections = '';
+        }
+
+        $cachKey = $stringIN . $spesialSections;
+
+
+        if (empty($cacheString[$cachKey])) {
             $i = 0;
             $done = 1;
             $code = [];
@@ -357,8 +522,10 @@ class Calculate
                     '|(?<string>"[^"]*")' .            //string
                     '|(?<comparison>!==|==|>=|<=|>|<|=|!=)' .       //comparison
                     '|(?<bool>false|true)' .   //10
-                    '|(?<param>(?<param_name>(?:\$@|@\$|\$\$|\$\#?|\#(?i:(?:old|s|h|c|l)\.)?\$?)(?:[a-zA-Z0-9_]+(?:{[^}]*})?))(?<param_items>(?:\[\[?\$?\#?[a-zA-Z0-9_"]+\]?\])*))' . //param,param_name,param_items
-                    '|(?<dog>@(?<dog_table>[a-zA-Z0-9_]{3,})\.(?<dog_field>[a-zA-Z0-9_]{2,})(?:\.(?<dog_field2>[a-zA-Z0-9_]{2,}))?(?<dog_items>(?:\[\[?\$?\#?[a-zA-Z0-9_"]+\]?\])*))`',
+                    '|(?<param>(?<param_name>(?:\$@|@\$|\$\$|\$\#?|\#(?i:(?:old|s|h|c|l|pnl)\.)?\$?)(?:[a-zA-Z0-9_]+(?:{[^}]*})?))(?<param_items>(?:\[\[?\$?\#?[a-zA-Z0-9_"]+\]?\])*))' . //param,param_name,param_items
+                    '|(?<dog>@(?<dog_table>[a-zA-Z0-9_]{3,})\.(?<dog_field>[a-zA-Z0-9_]{2,})(?:\.(?<dog_field2>[a-zA-Z0-9_]{2,}))?(?<dog_items>(?:\[\[?\$?\#?[a-zA-Z0-9_"]+\]?\])*))' .
+                    $spesialSections .      //as
+                    '`',
                     //dog,dog_table, dog_field,dog_items
 
                     function ($matches) use ($string, &$done, &$code) {
@@ -430,8 +597,12 @@ class Calculate
                                     'field2' => $matches['dog_field2'],
                                     'items' => $matches['dog_items']
                                 ];
+                            } elseif ($param = $matches['as']) {
+                                $code[] = [
+                                    'type' => 'as',
+                                    'string' => $param
+                                ];
                             }
-
 
                             $done = 1;
                         }
@@ -446,10 +617,10 @@ class Calculate
                     throw new errorException($this->translate('TOTUM-code format error [[%s]].', $string));
                 }
             }
-            $cacheString[$stringIN] = $code;
+            $cacheString[$cachKey] = $code;
         }
 
-        return $cacheString[$stringIN];
+        return $cacheString[$cachKey];
     }
 
     public function getLogVar()
@@ -744,6 +915,7 @@ class Calculate
                                 'json' => $this->parseTotumJson(substr($this->CodeStrings[$r['string']], 4)),
                                 'jsot' => $this->parseTotumJson(substr($this->CodeStrings[$r['string']], 4), true),
                                 'cond' => $this->parseTotumCond(substr($this->CodeStrings[$r['string']], 4)),
+                                'qrow' => $this->parseTotumQrow(substr($this->CodeStrings[$r['string']], 4)),
                                 default => match (substr($this->CodeStrings[$r['string']], 0, 3)) {
                                     'str' => $this->parseTotumStr(substr($this->CodeStrings[$r['string']], 3)),
                                     default => substr($this->CodeStrings[$r['string']], 1),
@@ -832,14 +1004,31 @@ class Calculate
         return [$varName => $value];
     }
 
+    protected function getExecVariableVal($paramVal)
+    {
+        try {
+            $codes = $this->getCodes($paramVal);
+        } catch (errorException $e) {
+            throw new errorException($this->translate('TOTUM-code format error [[%s]].', $paramVal));
+        }
+
+        foreach ($codes as &$v) {
+            if (is_array($v)) {
+                $v = $this->__getValue($v);
+            }
+        }
+        unset($v);
+
+        return $codes;
+    }
+
     protected function getParam($param, $paramArray)
     {
         $r = null;
         $isHashtag = false;
-        if (strlen($param) === 0) {
+        if (is_array($param) || strlen($param) === 0) {
             throw new errorException($this->translate('TOTUM-code format error [[%s]].', $this->varName));
         }
-
 
         switch ($param[0]) {
             case '@':
@@ -898,9 +1087,9 @@ class Calculate
                     if (!empty($paramArray['field2'])) {
                         $r = $processHardSelect($paramArray['field2']);
                     } elseif ($paramArray['field'] === 'id' || $paramArray['field'] === 'n' || ($this->Table->getTotum()->getTable($paramArray['table'],
-                                $this->Table->getCycle()?->getId()
-                                ?? (($this->row['id'] ?? null) && $this->Table->isCalcsTableFromThisCyclesTable($paramArray['table']) ? $this->row['id'] : null)
-                            )->getFields()[$paramArray['field']]['category'] ?? null) === 'column') {
+                            $this->Table->getCycle()?->getId()
+                            ?? (($this->row['id'] ?? null) && $this->Table->isCalcsTableFromThisCyclesTable($paramArray['table']) ? $this->row['id'] : null)
+                        )->getFields()[$paramArray['field']]['category'] ?? null) === 'column') {
                         $r = $processHardSelect('id');
                     } else {
                         $r = $this->Table->getSelectByParams(
@@ -1001,6 +1190,9 @@ class Calculate
                         $codeName = substr($param, 1);
                     }
 
+                    if (is_array($codeName) || is_bool($codeName)) {
+                        throw new errorException($this->translate('[[%s]] should be of type string.', 'Code line'));
+                    }
                     $inVars = [];
                     if ($varsStart = strpos($codeName, '{')) {
                         $codeNum = substr($codeName, $varsStart + 1, -1);
@@ -1050,6 +1242,11 @@ class Calculate
                     $nameVar = $this->getParam($nameVar, ['type' => 'param', 'param' => $nameVar]);
                 }
 
+                if (is_array($nameVar) || is_bool($nameVar)) {
+                    throw new errorException($this->translate('Invalid parameter name'));
+                }
+                $nameVar = (string)$nameVar;
+
                 if (array_key_exists($nameVar, $this->whileIterators)) {
                     $r = $this->whileIterators[$nameVar];
                 } else {
@@ -1093,6 +1290,24 @@ class Calculate
                             throw new errorException($this->translate('Previous row not found. Works only for calculation tables.'));
                         } else {
                             $rowVar = $this->row['PrevRow'][$nameVar] ?? '';
+                        }
+                    } elseif (preg_match('/^pnl\./i', $nameVar)) {
+                        $nameVar = substr($nameVar, 4);
+
+                        if (!key_exists('__edit_hash', $this->vars)) {
+                            return $this->getParam('#' . $nameVar, $paramArray);
+                        } else {
+                            $hashData = TmpTables::init($this->Table->getTotum()->getConfig())->getByHash(
+                                TmpTables::SERVICE_TABLES['edit_row'],
+                                $this->Table->getUser(),
+                                $this->vars['__edit_hash']
+                            );
+                            $rowData = $this->Table->checkEditRow($hashData);
+                            if ($rowData['id'] === $this->row['id']) {
+                                $rowVar = $rowData[$nameVar] ?? [];
+                            } else {
+                                return $this->getParam('#' . $nameVar, $paramArray);
+                            }
                         }
                     } else {
                         switch (substr($nameVar, 0, 2)) {
@@ -1252,6 +1467,15 @@ class Calculate
         return $date;
     }
 
+    protected function __checkBoolOrNull(mixed $fieldvalue)
+    {
+        return match ($fieldvalue) {
+            'true', true => true,
+            'false', false => false,
+            default => null
+        };
+    }
+
 
     protected function __checkTableIdOrName($tableId, string $paramName): array
     {
@@ -1290,9 +1514,10 @@ class Calculate
         }
     }
 
-    protected function __checkNumericParam($isDigit, $paramName)
+    protected function __checkNumericParam($isDigit, $paramName, $withEfloats = false)
     {
-        if (is_array($isDigit) || !is_numeric($isDigit)) {
+        if (is_array($isDigit) || !is_numeric($isDigit) || (!$withEfloats && !preg_match('/^[-+]?[0-9.]+$/',
+                    $isDigit))) {
             throw new errorException($this->translate('The %s parameter must be a number.', $paramName));
         }
     }
@@ -1311,12 +1536,13 @@ class Calculate
     {
         return match ($paramArray['type']) {
             'param' => $this->getParam($paramArray['param'], $paramArray),
-            'string' => $paramArray['string'],
+            'as', 'string' => $paramArray['string'],
             'stringParam' => match ($spec = substr($this->CodeStrings[$paramArray['string']], 0, 4)) {
                 'math' => $this->parseTotumMath(substr($this->CodeStrings[$paramArray['string']], 4)),
                 'json' => $this->parseTotumJson($str = substr($this->CodeStrings[$paramArray['string']], 4)),
                 'jsot' => $this->parseTotumJson($str = substr($this->CodeStrings[$paramArray['string']], 4), true),
                 'cond' => $this->parseTotumCond($str = substr($this->CodeStrings[$paramArray['string']], 4)),
+                'qrow' => $this->parseTotumQrow(substr($this->CodeStrings[$paramArray['string']], 4)),
                 default => match (substr($spec, 0, 3)) {
                     'str' => $this->parseTotumStr(substr($this->CodeStrings[$paramArray['string']], 3)),
                     default => substr($this->CodeStrings[$paramArray['string']], 1),
@@ -1386,6 +1612,15 @@ class Calculate
                                         $param . ': ' . $paramVal . ' ' . $e->getMessage()));
                                 }
 
+
+                                if ($param === 'where' && count($whereCodes) === 1) {
+                                    $value = $this->__getValue($whereCodes[0]);
+                                    if (is_array($value) && count($value) === 1 && key_exists('qrow', $value)) {
+                                        $paramVal = $value;
+                                    }
+                                    break;
+                                }
+
                                 if (count($whereCodes) != 3) {
                                     throw new errorException($this->translate('The [[%s]] parameter must contain 3 elements.',
                                         $param));
@@ -1414,7 +1649,9 @@ class Calculate
                                     'field' => $this->getParam(
                                         $field,
                                         []
-                                    ), 'operator' => $whereCodes['comparison'], 'value' => $value
+                                    ),
+                                    'operator' => $whereCodes['comparison'],
+                                    'value' => $value
                                 ];
                             } else {
                                 $paramVal = $this->execSubCode($paramVal, $param, true);
@@ -1422,9 +1659,11 @@ class Calculate
                         }
                         break;
                 }
+
                 unset($paramVal);
             }
         }
+
         return $params;
     }
 
@@ -1481,7 +1720,7 @@ class Calculate
         $env = [
             'table' => $this->Table->getTableRow()['name']
         ];
-        $env['cycle_id'] = match ($this->Table->getTableRow()['type']) {
+        $env['extra'] = match ($this->Table->getTableRow()['type']) {
             'calcs' => $this->Table->getCycle()->getId(),
             'tmp' => $this->Table->getTableRow()['sess_hash'],
             default => null
@@ -1516,7 +1755,7 @@ class Calculate
                 }
 
 
-                $fieldValue = $this->__getValue($fc[2] ?? $fc[1]);
+                $fieldValue = $this->__getValue($fc[2] ?? $fc[1] ?? throw new errorException($this->translate('TOTUM-code format error: missing part of parameter.')));
 
                 if (in_array(strtolower($funcName), ['set', 'setlist', 'setlistextended'])) {
                     if ($fc[1]['type'] === 'operator') {

@@ -18,7 +18,7 @@ use totum\tableTypes\aTable;
 class CalculcateFormat extends Calculate
 {
     protected const formats = ['block', 'color', 'bold', 'background', 'italic', 'decoration', 'progress', 'progresscolor', 'icon', 'text', 'comment', 'hideinpanel', 'tab', 'align', 'editbutton', 'hide', 'placeholder', 'showhand', 'expand', 'textasvalue'];
-    protected const tableformats = ['buttons', 'blockadd', 'blockdelete', 'block', 'blockorder', 'background', 'blockduplicate', 'tabletitle', 'rowstitle', 'fieldtitle', 'fieldhide', 'tabletext', 'tablehtml', 'tablecomment', 'browsertitle', 'interlace', 'printbuttons'];
+    protected const tableformats = ['dotbuttons', 'hidedots', 'buttons', 'topbuttons', 'extbuttons', 'blockadd', 'blockdelete', 'block', 'blockorder', 'background', 'blockduplicate', 'tabletitle', 'rowstitle', 'fieldtitle', 'fieldhide', 'fieldshide', 'tabletext', 'tablehtml', 'tablecomment', 'browsertitle', 'interlace', 'printbuttons', 'hideadd'];
     protected const rowformats = ['block', 'blockdelete', 'blockorder', 'blockduplicate', 'color', 'bold', 'background', 'italic', 'decoration', 'rowcomment'];
     protected const floatFormat = ['fill', 'glue', 'maxheight', 'maxwidth', 'nextline', 'blocknum', 'height', 'breakwidth'];
 
@@ -41,6 +41,24 @@ class CalculcateFormat extends Calculate
         }
         ksort($this->startSections);
         ksort($this->startPanelSections);
+    }
+
+    function execTableDynamic(aTable $table): mixed
+    {
+        $this->setEnvironmentVars(['name' => 'DN'], null, $table->getTbl()['params'], $table->getTbl()['params'], $table->getTbl(), $table->getTbl(), $table);
+        $this->newLog = ['text' => $this->translate('Tables dymanic format'), 'children' => []];
+        try {
+            if (!key_exists('dn=', $this->code)) {
+                return [];
+            }
+            $result = $this->execSubCode($this->code['dn='], 'dn=');
+
+            $this->newLog['text'] .= ': ' . json_encode($result, JSON_UNESCAPED_UNICODE);
+        } catch (SqlException $e) {
+            $this->error = $this->translate('Database error: [[%s]]', $e->getMessage());
+            $this->newLog['text'] .= ': ' . $this->error;
+        }
+        return $result ?? [];
     }
 
     protected function formStartSections()
@@ -165,16 +183,21 @@ class CalculcateFormat extends Calculate
     protected function funcPanelButton(string $paramsIn): ?array
     {
         if ($params = $this->getParamsArray($paramsIn,
-            [],
-            ['text', 'code', 'icon', 'background', 'vars', 'refresh', 'condition'])) {
+            ['var'],
+            ['text', 'code', 'icon', 'background', 'vars', 'refresh', 'condition', 'var'])) {
             if ($this->getConditionsResult($params)) {
-                $params = $this->getParamsArray($paramsIn, [], ['condition']);
+                $params = $this->getParamsArray($paramsIn, ['var'], ['condition'], ['var']);
 
                 $this->__checkNotEmptyParams($params, ['code']);
                 $this->__checkNotArrayParams($params, ['text', 'code', 'icon', 'background', 'refresh']);
 
                 $values = [array_intersect_key($params,
                     array_flip(['text', 'code', 'icon', 'background', 'vars', 'refresh']))];
+                if (!empty($params['var'])) {
+                    foreach ($params['var'] as $v) {
+                        $values[0]['vars'][$v['field']] = $v['value'];
+                    }
+                }
                 return ['type' => 'buttons', 'value' => $values];
             }
         }
@@ -294,7 +317,7 @@ class CalculcateFormat extends Calculate
     protected function funcExec(string $params): mixed
     {
         if ($params = $this->getParamsArray($params, ['var'], ['var'])) {
-            if (!empty($code = $params['code'] ?? $params['kod'])) {
+            if (!empty($code = $params['code'] ?? $params['kod'] ?? '')) {
 
                 if (preg_match('/^[a-z_0-9]{3,}$/', $code) && key_exists($code, $this->Table->getFields())) {
                     $code = $this->Table->getFields()[$code]['format'] ?? '';
@@ -358,14 +381,41 @@ class CalculcateFormat extends Calculate
     {
         if ($params = $this->getParamsArray(
             $params,
-            ['fieldhide', 'fieldtitle'],
+            ['fieldhide', 'fieldtitle', 'hidedots'],
             array_merge(['condition'], static::tableformats)
         )) {
 
             if ($this->getConditionsResult($params)) {
                 foreach (static::tableformats as $format) {
                     if (key_exists($format, $params)) {
-                        if (in_array($format, ['fieldhide', 'fieldtitle'])) {
+                        if ($format === 'hidedots') {
+                            foreach ($params[$format] as $fieldparam) {
+                                $_fieldparam = $this->getCodes($fieldparam);
+                                if (count($_fieldparam) === 3) {
+                                    if (($_fieldparam['comparison'] ?? null) === '=') {
+                                        $fieldname = $this->__getValue($_fieldparam[0]);
+                                        $fieldvalue = $this->__getValue($_fieldparam[1]);
+                                        if (in_array($fieldname, ['window', 'table'])) {
+                                            $fieldvalue = $this->__checkBoolOrNull($fieldvalue);
+                                            if (is_bool($fieldvalue)) {
+                                                $this->formatArray[$format][substr($fieldname, 0, 1)] = $fieldvalue;
+                                            }
+                                            continue;
+                                        }
+                                    }
+                                } elseif (count($_fieldparam) === 1) {
+                                    $fieldvalue = $this->__getValue($_fieldparam[0]);
+                                    $fieldvalue = $this->__checkBoolOrNull($fieldvalue);
+                                    if (is_bool($fieldvalue)) {
+                                        $this->formatArray[$format]['w'] = $fieldvalue;
+                                        $this->formatArray[$format]['t'] = $fieldvalue;
+                                    }
+                                    continue;
+                                }
+                                throw new errorException($this->translate('TOTUM-code format error [[%s]].',
+                                    $fieldparam));
+                            }
+                        } elseif (in_array($format, ['fieldhide', 'fieldtitle'])) {
                             foreach ($params[$format] as $fieldparam) {
                                 $fieldparam = $this->getCodes($fieldparam);
                                 if (count($fieldparam) !== 3 || $fieldparam['comparison'] !== '=') {
@@ -375,15 +425,35 @@ class CalculcateFormat extends Calculate
                                 $fieldname = $this->__getValue($fieldparam[0]);
                                 $fieldvalue = $this->__getValue($fieldparam[1]);
 
-                                $this->formatArray[$format][$fieldname] = $fieldvalue;
+                                if (is_string($fieldname)) {
+                                    $this->formatArray[$format][$fieldname] = $fieldvalue;
+                                }
+                            }
+                        } elseif ($format === 'fieldshide') {
+                            $fieldnames = is_string($params[$format]) ? $this->__getValue($this->getCodes($params[$format])[0]) : $params[$format];
+                            foreach ((array)$fieldnames as $fieldname) {
+                                if (is_string($fieldname)) {
+                                    $this->formatArray['fieldhide'][$fieldname] = 'force';
+                                }
                             }
                         } else {
                             $this->formatArray[$format] = is_string($params[$format]) ? $this->__getValue($this->getCodes($params[$format])[0]) : $params[$format];
+
                         }
                     }
                 }
+            } elseif (key_exists('fieldshide', $params)) {
+
+                $fieldnames = is_string($params['fieldshide']) ? $this->__getValue($this->getCodes($params['fieldshide'])[0]) : $params['fieldshide'];
+                foreach ((array)$fieldnames as $fieldname) {
+                    if (is_string($fieldname)) {
+                        $this->formatArray['fieldhide'][$fieldname] = false;
+                    }
+                }
+
             }
         }
+
     }
 
     protected function funcSetFormFieldFormat($params): ?array
@@ -457,5 +527,6 @@ class CalculcateFormat extends Calculate
             }
         }
     }
+
 
 }

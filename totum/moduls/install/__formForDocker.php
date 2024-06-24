@@ -28,7 +28,7 @@
     $post['consol'] = '1';
 
     $post['admin_email'] = $post['admin_email'] ?? '';
-    $post['user_pass'] = $post['admin_email'] ?? '';
+    $post['user_pass'] = $post['user_pass'] ?? '';
     $post['user_login'] = $post['user_login'] ?? 'admin';
     $post['db_schema'] = 'totum';
 
@@ -58,7 +58,8 @@
                     type: 'select', id: "langSelect", name: 'lang', label: "", vals: [
                         {name: "Русский язык", val: 'ru'},
                         {name: "English", val: 'en'},
-                        {name: "中国", val: 'zh'},
+                        {name: "Deutsch", val: 'de'},
+
                     ]
                 },
                 {

@@ -85,19 +85,19 @@ echo -e "\e[40;1;37m                            -+*++++++++***+*:               
 echo -e "\e[40;1;37m                            -**+**+***+***+*:                            \033[0m"
 echo -e "\e[40;1;37m                            -******::****:**:                            \033[0m"
 echo -e "\e[40;1;37m                                                                         \033[0m"
-echo -e "\e[43;1;35m- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m   TOTUM AUTOINSTALL SCRIPT !WITHOUT DOMAIN!                             \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m   This install script will help you to install Totum online             \033[0m" 
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m   on clean Ubuntu 20 without SSL and valid domain.                      \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m   For email you need to configure you SMTP in Conf.php in               \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;31m   /home/totum/totum-mit/Conf.php                                        \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\033[0m"
+echo -e "\033[43m\033[30m- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m   TOTUM AUTOINSTALL SCRIPT !WITHOUT DOMAIN!                             \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m   This install script will help you to install Totum online             \033[0m" 
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m   \033[43m\033[31mONLY ON CLEAR!!! Ubuntu 20 \033[43m\033[30mwithout SSL and valid domain.              \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m   For email you need to configure you SMTP in Conf.php in               \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[31m   /home/totum/totum-mit/Conf.php                                        \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\033[0m"
 echo
 
 read -p "If you ready to go, type (A) or cancel (Ctrl + C): " TOTUMRUN
@@ -120,9 +120,11 @@ fi
 CERTBOTDOMAIN=$(curl ifconfig.me/ip)
 
 echo
+echo -e "\033[41mIMPORTANT!!! Look at the next step. If after installation you see the error «schema not found» you can change it in /home/totum/totum-mit/Conf.php\033[0m"
+echo
 echo -e "Server IP detected as \033[1m>>> ${CERTBOTDOMAIN} <<<\033[0m "
 echo
-read -p "If it right type A or type your custom IP or localhost for access to Totum after install: " CERTBOTDOMAIN_CHECK
+read -p "If it right type (A) or type your custom IP or localhost for access to Totum after install: " CERTBOTDOMAIN_CHECK
 echo
 
 if [[ $CERTBOTDOMAIN_CHECK = "A" ]]
@@ -154,7 +156,8 @@ read -p "Create Totum superuser password: " TOTUMADMINPASS
 echo
 echo "1) EN"
 echo "2) RU"
-echo "3) ZH (by snmin)"
+echo "3) ES"
+echo "4) DE"
 echo
 
 read -p "Select language: " TOTUMLANG
@@ -167,7 +170,10 @@ then
   TOTUMLANG=ru
 elif [[ $TOTUMLANG -eq 3 ]]
 then
-  TOTUMLANG=zh
+  TOTUMLANG=es
+elif [[ $TOTUMLANG -eq 4 ]]
+then
+  TOTUMLANG=de
 else
   TOTUMLANG=en
 fi
@@ -237,12 +243,13 @@ sudo timedatectl set-timezone $TOTUMTIMEZONE
 
 # Install PHP
 
-sudo apt -y install php8.0 php8.0-bcmath php8.0-cli php8.0-curl php8.0-fpm php8.0-gd php8.0-mbstring php8.0-opcache php8.0-pgsql php8.0-xml php8.0-zip php8.0-soap
+sudo apt -y install php8.0 php8.0-bcmath php8.0-cli php8.0-curl php8.0-fpm php8.0-gd php8.0-mbstring php8.0-opcache php8.0-pgsql php8.0-xml php8.0-zip php8.0-soap php8.0-ldap
 sudo service apache2 stop
 sudo systemctl disable apache2
-sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit-docker/main/nginx_fpm_conf/totum_fpm.conf
+sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit/master/totum/moduls/install/totum_fpm.conf
 sudo chown root:root ./totum_fpm.conf
 sudo mv ./totum_fpm.conf /etc/php/8.0/fpm/pool.d/totum.conf
+sudo sed -i "s:Europe/London:${TOTUMTIMEZONE}:g" /etc/php/8.0/fpm/pool.d/totum.conf
 sudo mkdir /var/lib/php/sessions_totum
 sudo chown root:root /var/lib/php/sessions_totum
 sudo chmod 1733 /var/lib/php/sessions_totum
@@ -261,7 +268,7 @@ cd ~
 # Install Nginx
 
 sudo apt -y install nginx
-sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit-docker/main/nginx_fpm_conf/totum_nginx.conf
+sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit/master/totum/moduls/install/totum_nginx.conf
 sudo chown root:root ./totum_nginx.conf
 sudo mv ./totum_nginx.conf /etc/nginx/sites-available/totum.online.conf
 sudo sed -i "s:/var/www/:/home/totum/:g" /etc/nginx/sites-available/totum.online.conf
@@ -286,6 +293,8 @@ sudo -u totum bash -c "php /home/totum/totum-mit/composer.phar install --no-dev"
 sudo -u totum bash -c "/home/totum/totum-mit/bin/totum install --pgdump=pg_dump --psql=psql -e -- ${TOTUMLANG} multi totum ${CERTBOTEMAIL} ${CERTBOTDOMAIN} admin ${TOTUMADMINPASS} totum localhost totum ${TOTUMBASEPASS}"
 
 sudo bash -c "echo -e '* * * * * cd /home/totum/totum-mit/ && bin/totum schemas-crons\n*/10 * * * * cd /home/totum/totum-mit/ && bin/totum clean-tmp-dir\n*/10 * * * * cd /home/totum/totum-mit/ && bin/totum clean-schemas-tmp-tables' | crontab -u totum -"
+
+sudo -u totum bash -c "openssl rand -base64 64 > /home/totum/totum-mit/Crypto.key"
 
 # Replace Sendmail trait by SMTP trait
 

@@ -58,8 +58,9 @@ trait FuncOperationsTrait
 
         $ch = curl_init();
         curl_setopt($ch, CURLOPT_URL, $url);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
-        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, 0);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, $this->Table->getTotum()->getConfig()->isCheckSsl() ? 2 : 0);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, $this->Table->getTotum()->getConfig()->isCheckSsl());
+
         if (!empty($_SERVER['HTTP_USER_AGENT'])) {
             curl_setopt($ch, CURLOPT_USERAGENT, $_SERVER['HTTP_USER_AGENT']);
         }
@@ -146,7 +147,7 @@ trait FuncOperationsTrait
 
     protected function funcExecSSH(string $params): bool|string|null
     {
-        if (!$this->Table->getTotum()->getConfig()->isExecSSHOn()) {
+        if (!$this->Table->getTotum()->getConfig()->isExecSSHOn(true)) {
             throw new criticalErrorException($this->translate('The ExecSSH function is disabled. Enable execSSHOn in Conf.php.'));
         }
         $params = $this->getParamsArray($params);
@@ -181,6 +182,7 @@ trait FuncOperationsTrait
         if (empty($params['file'])) {
             throw new errorException($this->translate('Fill in the parameter [[%s]].', 'file'));
         }
+        $this->__checkNotArrayParams($params, ['file']);
 
         return File::getContent($params['file'], $this->Table->getTotum()->getConfig());
     }

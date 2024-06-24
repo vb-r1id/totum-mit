@@ -19,11 +19,17 @@ use totum\config\Conf;
 class File extends Field
 {
     protected static $transactionCommits = [];
+    public const DOC_PREVIEW_POSTFIX = '!docpreview!.pdf';
 
     public function addViewValues($viewType, array &$valArray, $row, $tbl = [])
     {
         parent::addViewValues($viewType, $valArray, $row, $tbl);
         switch ($viewType) {
+            case 'web':
+                if (!empty($valArray['e'])) {
+                    $valArray['v'] = [];
+                }
+                break;
             case 'csv':
                 throw new errorException($this->translate('Export via csv is not available for [[%s]] field.', 'file'));
             case 'print':
@@ -73,6 +79,9 @@ class File extends Field
         if (is_file($preview = $fullFileName . '_thumb.jpg')) {
             unlink($preview);
         }
+        if (is_file($preview = $fullFileName . File::DOC_PREVIEW_POSTFIX)) {
+            unlink($preview);
+        }
     }
 
     public static function getFilePath($file_name, Conf $Config): string
@@ -102,13 +111,18 @@ class File extends Field
         return false;
     }
 
-    protected static function getThumb($tmpFileName, $ext): \GdImage|bool
+    protected static function getThumb($tmpFileName, $ext, Conf $Config): \GdImage|bool
     {
         if ($ext === 'png') {
-            $source = imagecreatefrompng($tmpFileName);
+            $source = @imagecreatefrompng($tmpFileName);
         } else {
-            $source = imagecreatefromjpeg($tmpFileName);
+            $source = @imagecreatefromjpeg($tmpFileName);
         }
+
+        if (!$source) {
+            throw new criticalErrorException($Config->getLangObj()->translate('Wrong format file'));
+        }
+
         // получение нового размера
         list($width, $height) = getimagesize($tmpFileName);
 
@@ -147,16 +161,17 @@ class File extends Field
         return $thumb;
     }
 
-    protected static function checkAndCreateThumb($tmpFileName, $name)
+    protected static function checkAndCreateThumb($tmpFileName, $name, Conf $Config)
     {
         if ($ext = static::isImage($name)) {
             $thumbName = static::getTmpThumbName($tmpFileName);
-            $thumb = static::getThumb($tmpFileName, $ext);
+            $thumb = static::getThumb($tmpFileName, $ext, $Config);
             imagejpeg($thumb, $thumbName, 100);
         }
     }
 
-    public static function getTmpThumbName($tmpFileName){
+    public static function getTmpThumbName($tmpFileName)
+    {
         return $tmpFileName . '_thumb.jpg';
     }
 
@@ -170,7 +185,7 @@ class File extends Field
             }
 
             if (copy($_FILES['file']['tmp_name'], $tmpFileName)) {
-                static::checkAndCreateThumb($tmpFileName, $_FILES['file']['name']);
+                static::checkAndCreateThumb($tmpFileName, $_FILES['file']['name'], $Config);
                 return ['fname' => preg_replace('`^.*/([^/]+)$`', '$1', $tmpFileName)];
             }
         }
@@ -199,6 +214,22 @@ class File extends Field
             . ($this->table->getTableRow()['type'] === 'tmp' ? '!tmp!' : '');
     }
 
+    public function filterDuplicatedFiled($files, $rowId = null): array
+    {
+        $prefix = $this->_getFprefix($rowId);
+        $filteredFiles = [];
+        if (is_array($files)) {
+            foreach ($files as $file) {
+                if (is_array($file) && key_exists('file', $file) && is_string($file['file'])) {
+                    if (str_starts_with($file['file'], $prefix)) {
+                        $filteredFiles[] = $file;
+                    }
+                }
+            }
+        }
+        return $filteredFiles;
+    }
+
     protected function modifyValue($modifyVal, $oldVal, $isCheck, $row)
     {
         if (is_object($modifyVal) && empty($this->data['multiple'])) {
@@ -210,7 +241,7 @@ class File extends Field
         if (!$isCheck) {
             $deletedFiles = [];
             if (is_object($modifyVal)) {
-                if (empty($oldVal)) {
+                if (empty($oldVal) || !is_array($oldVal)) {
                     $oldVal = array();
                 }
                 $modifyVal = match ($modifyVal->sign) {
@@ -221,11 +252,12 @@ class File extends Field
             } elseif (!empty($oldVal) && is_array($oldVal)) {
                 foreach ($oldVal as $fOld) {
                     foreach ($modifyVal as $file) {
-                        if ($fOld['file'] === ($file['file'] ?? null)) {
+                        if (is_array($fOld) && $fOld['file'] === ($file['file'] ?? null)) {
                             continue 2;
                         }
                     }
-                    if (str_starts_with($fOld['file'] ?? '', $this->_getFprefix($row['id'] ?? null))) {
+                    if (is_array($fOld) && str_starts_with($fOld['file'] ?? '',
+                            $this->_getFprefix($row['id'] ?? null))) {
                         $deletedFiles[] = $fOld;
                     }
                 }
@@ -239,6 +271,7 @@ class File extends Field
         return $modifyVal;
     }
 
+
     protected function checkValByType(&$val, $row, $isCheck = false)
     {
         if (is_null($val) || $val === '' || $val === []) {
@@ -250,45 +283,35 @@ class File extends Field
         }
 
 
+        $createTmpFile = function ($fileString, &$file) {
+            $ftmpname = tempnam(
+                $this->table->getTotum()->getConfig()->getTmpDir(),
+                $this->table->getTotum()->getConfig()->getSchema() . '.' . $this->table->getUser()->getId() . '.'
+            );
+            file_put_contents($ftmpname, $fileString);
+
+            if (!empty($file['gz'])) {
+                `gzip $ftmpname`;
+                $ftmpname .= '.gz';
+                unset($file['gz']);
+                $file['name'] .= '.gz';
+            }
+            $file['size'] = filesize($ftmpname);
+            $file['tmpfile'] = preg_replace('`^.*/([^/]+)$`', '$1', $ftmpname);
+
+            static::checkAndCreateThumb($ftmpname, $file['name'], $this->table->getTotum()->getConfig());
+        };
+
         /*Добавление через filestring и filestringbase64 */
         foreach ($val as &$file) {
             if (!empty($file['filestring'])) {
-                $ftmpname = tempnam(
-                    $this->table->getTotum()->getConfig()->getTmpDir(),
-                    $this->table->getTotum()->getConfig()->getSchema() . '.' . $this->table->getUser()->getId() . '.'
-                );
-                file_put_contents($ftmpname, $file['filestring']);
-
-                if (!empty($file['gz'])) {
-                    `gzip $ftmpname`;
-                    $ftmpname .= '.gz';
-                    unset($file['gz']);
-                    $file['name'] .= '.gz';
-                }
-                $file['size'] = filesize($ftmpname);
-
+                $createTmpFile($file['filestring'], $file);
                 unset($file['filestring']);
-                static::checkAndCreateThumb($ftmpname, $file['name']);
-                $file['tmpfile'] = preg_replace('`^.*/([^/]+)$`', '$1', $ftmpname);
             } elseif (!empty($file['filestringbase64'])) {
-                $ftmpname = tempnam(
-                    $this->table->getTotum()->getConfig()->getTmpDir(),
-                    $this->table->getTotum()->getConfig()->getSchema() . '.' . $this->table->getUser()->getId() . '.'
-                );
-
-                file_put_contents($ftmpname, base64_decode($file['filestringbase64']));
-
-                if (!empty($file['gz'])) {
-                    `gzip $ftmpname`;
-                    $ftmpname .= '.gz';
-                    unset($file['gz']);
-                    $file['name'] .= '.gz';
-                }
-                $file['size'] = filesize($ftmpname);
-
-                static::checkAndCreateThumb($ftmpname, $file['name']);
+                $createTmpFile(base64_decode($file['filestringbase64']), $file);
                 unset($file['filestringbase64']);
-                $file['tmpfile'] = preg_replace('`^.*/([^/]+)$`', '$1', $ftmpname);
+            } elseif (empty($file['file']) && empty($file['tmpfile'])) {
+                throw new errorException($this->translate('The data format is not correct for the File field.'));
             }
         }
         unset($file);
@@ -341,11 +364,11 @@ class File extends Field
             $vals = [];
             foreach ($val as $file) {
                 $fl = [];
-                if (!array_key_exists('name', $file)) {
+                if (!is_array($file) || !array_key_exists('name', $file)) {
                     throw new criticalErrorException($this->translate('The data format is not correct for the File field.'));
                 }
 
-                $file['ext'] = preg_replace('/^.*\.([a-z0-9]{2,4})$/', '$1', strtolower($file['name']));
+                $file['ext'] = preg_replace('/^.*\.([a-z0-9]{1,10})$/', '$1', strtolower($file['name']));
 
                 if (empty($file['ext'])) {
                     throw new criticalErrorException($this->translate('The file must have an extension.'));
@@ -379,6 +402,8 @@ class File extends Field
                                 die(json_encode(['error' => $this->translate('Failed to copy preview.')],
                                     JSON_UNESCAPED_UNICODE));
                             }
+                        } elseif (is_file($fname . File::DOC_PREVIEW_POSTFIX)) {
+                            unlink($fname . File::DOC_PREVIEW_POSTFIX);
                         }
                         unset(static::$transactionCommits[$fname]);
                     });
@@ -411,6 +436,8 @@ class File extends Field
                                 }
                                 if (is_file($otherfname . '_thumb.jpg')) {
                                     copy($otherfname . '_thumb.jpg', $fname . '_thumb.jpg');
+                                } elseif (is_file($fname . File::DOC_PREVIEW_POSTFIX)) {
+                                    unlink($fname . File::DOC_PREVIEW_POSTFIX);
                                 }
                                 unset(static::$transactionCommits[$fname]);
                             });
@@ -430,6 +457,25 @@ class File extends Field
             }
             $val = $vals;
         }
+    }
+
+    public static function replaceImageSrcsWithEmbedded(Conf $Config, string $html): string
+    {
+        return preg_replace_callback(
+            '~src\s*=\s*([\'"]?)(?:http(?:s?)://' . $Config->getFullHostName() . ')?/fls/(.*?)\1~',
+            function ($matches) use ($Config, &$attachments) {
+                if (!empty($matches[2])) {
+                    if ($file = File::getContent($matches[2],
+                        $Config)) {
+                        return 'src="data:image/' . preg_replace('/^.*?\.([^.]+)$/',
+                                '$1',
+                                $matches[2]) . ';base64,' . base64_encode($file) . '"';
+                    }
+                }
+                return null;
+            },
+            $html
+        );
     }
 
     public static function getContent($fname, Conf $Config): bool|string|null

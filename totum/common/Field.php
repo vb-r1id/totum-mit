@@ -13,6 +13,7 @@ use totum\common\calculates\Calculate;
 use totum\common\calculates\CalculateAction;
 use totum\common\calculates\CalculcateFormat;
 use totum\common\Lang\RU;
+use totum\fieldTypes\Button;
 use totum\fieldTypes\Checkbox;
 use totum\fieldTypes\Comments;
 use totum\fieldTypes\Date;
@@ -179,7 +180,7 @@ class Field
                         $model = Comments::class;
                         break;
                     case 'button':
-                        $model = Field::class;
+                        $model = Button::class;
                         break;
                     case 'unic':
                         if ($table->getTableRow()['name'] === 'tables' && $fieldData['name'] === 'name') {
@@ -220,27 +221,28 @@ class Field
         return !!$this->CalculateFormat;
     }
 
-    public function addFormat(&$valArray, $row, $tbl, $pageIds)
+    public function addFormat(&$valArray, $row, $tbl, $pageIds, $vars = [])
     {
         if ($this->checkFormatObject()) {
             $Log = $this->table->calcLog(['itemId' => $row['id'] ?? null, 'cType' => 'format', 'field' => $this->data['name']]);
 
+            $vars['rows'] = $this->table->getRowsForFormat($pageIds);
             if ($format = $this->CalculateFormat->getFormat($this->data['name'],
                 $row,
                 $tbl,
                 $this->table,
-                ['rows' => $this->table->getRowsForFormat($pageIds)])) {
+                Vars: $vars)) {
                 $valArray['f'] = $format;
             }
             $this->table->calcLog($Log, 'result', $format);
         }
     }
 
-    public function getPanelFormat($row, $tbl)
+    public function getPanelFormat($row, $tbl, $vars = [])
     {
         if ($this->checkFormatObject()) {
             $Log = $this->table->calcLog(['itemId' => $row['id'] ?? null, 'cType' => 'format', 'field' => $this->data['name']]);
-            $result = $this->CalculateFormat->getPanelFormat($this->data['name'], $row, $tbl, $this->table);
+            $result = $this->CalculateFormat->getPanelFormat($this->data['name'], $row, $tbl, $this->table, $vars);
             $this->table->calcLog($Log, 'result', $result);
         } else {
             $result = null;
@@ -461,7 +463,7 @@ class Field
                 throw new errorException($this->translate('Field [[%s]] of table [[%s]] is required.',
                     [$this->data['title'], $this->table->getTableRow()['title']]));
             }
-        }
+        } else $inNewVal = $this->addValue($inNewVal, $isCheck, $row);
 
 
         if ($insertable) {
@@ -676,6 +678,11 @@ class Field
         return $this->data['default'] ?? null;
     }
 
+    protected function addValue($inNewVal, $isCheck, $row)
+    {
+        return $inNewVal;
+    }
+
     protected function modifyValue($modifyVal, $oldVal, $isCheck, $row)
     {
         if (is_object($modifyVal)) {
@@ -690,6 +697,10 @@ class Field
 
     protected function checkVal(&$newVal, $row, $isCheck = false)
     {
+        if ($this->data['dynamic'] ?? false) {
+            return;
+        }
+
         if ($newVal['e'] ?? null) {
             return;
         }
@@ -714,7 +725,7 @@ class Field
             try {
                 $this->checkValByType($val, $row, $isCheck);
             } catch (errorException $errorException) {
-                $newVal['v'] = $this->data['errorText'];
+                $newVal['v'] = is_a($this, Number::class) ? null : $this->data['errorText'];
                 $newVal['e'] = $errorException->getMessage();
             }
         }
@@ -793,4 +804,6 @@ class Field
             }
         }
     }
+
+
 }

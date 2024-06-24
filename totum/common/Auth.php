@@ -74,22 +74,68 @@ class Auth
         return array_intersect(static::$shadowRoles, $User->getRoles())[0] ?? 0;
     }
 
-    public static function getUsersForShadow(Conf $Config, User $User, $id = null): array
+    public static function getUsersForShadow(Conf $Config, User $User, $id = null, $q = ''): array
     {
-        $_id = $id ? 'id = ' . (int)$id : 'true';
+        $_id = 'true';
+        $_q = 'true';
+        $params = [];
+        $limitNum = 10;
+        $limit = 'ORDER By id limit ' . $limitNum;
+
+        if ($id) {
+            $_id = 'id = ' . (int)$id;
+            $limit = '';
+        } elseif ($q) {
+            $qs = preg_split('/\s+/', $q);
+            $_q = '';
+            foreach ($qs as $qEl) {
+                if ($_q) {
+                    $_q .= ' AND ';
+                }
+                if (str_contains($qEl, '@')) {
+                    $_q .= "lower(email->>'v') like ?";
+                    $params[] = '%' . mb_strtolower($qEl) . '%';
+                } else {
+                    $_q .= "lower(fio->>'v') like ?";
+                    $params[] = '%' . mb_strtolower($qEl) . '%';
+                }
+            }
+
+        }
+
+
         $_roles = 'true';
         if (Auth::getShadowRole($User) !== 1) {
             $_roles = "(roles->'v' @> '[\"1\"]'::jsonb) = FALSE";
         }
-        $r = $Config->getModel('users')->preparedSimple(
-            "select id, fio->>'v' as fio from users where interface->>'v'='web'" .
-            " AND on_off->>'v'='true' AND login->>'v' NOT IN ('service', 'cron', 'anonim') " .
-            " AND $_id AND $_roles " .
-            " AND is_del = false"
-        );
-        $r->execute();
-        $r = $r->fetchAll(\PDO::FETCH_ASSOC);
-        return $r;
+
+        $getQuery = function ($fields) use ($_q, $_roles, $_id) {
+            return <<<SQL
+select $fields from users where interface->>'v'='web' 
+AND on_off->>'v'='true' AND is_del = false AND (login->>'v' NOT IN ('service', 'cron', 'anonim') OR login->>'v' is null)  
+AND $_id AND $_roles AND $_q  
+
+SQL;
+        };
+
+        if (!$id) {
+            $countPrepared = $Config->getModel('users')->preparedSimple($getQuery('count(*)'));
+            $countPrepared->execute($params);
+            $count = $countPrepared->fetchColumn();
+            $r = $Config->getModel('users')->preparedSimple($getQuery("id, fio->>'v' as fio ") . $limit);
+            $r->execute($params);
+
+            return [
+                'sliced' => $count > $limitNum,
+                'users' => $r->fetchAll(\PDO::FETCH_ASSOC)
+            ];
+
+        } else {
+            $r = $Config->getModel('users')->preparedSimple($getQuery("id, fio->>'v' as fio "));
+            $r->execute($params);
+            $r = $r->fetchAll(\PDO::FETCH_ASSOC);
+            return $r;
+        }
     }
 
     public static function getUserManageTables(Conf $Config, User $User)
@@ -132,7 +178,28 @@ class Auth
             if (str_contains($login, '@')) {
                 $where['email'] = strtolower($login);
             } else {
-                $where['login'] = $login;
+                if ($interface === 'web') {
+                    $whereObject = new \stdClass();
+                    $whereObject->whereStr = '';
+                    foreach ($where as $k => $v) {
+                        $whereObject->params[] = $v;
+                        if ($whereObject->whereStr != '') {
+                            $whereObject->whereStr .= ' AND ';
+                        }
+                        if ($k === 'is_del') {
+                            $whereObject->whereStr .= ' is_del = ?';
+                        } else {
+                            $whereObject->whereStr .= ' ' . $k . '->>\'v\' = ?';
+                        }
+                    }
+
+                    $whereObject->params[] = mb_strtolower($login);
+                    $whereObject->whereStr .= ' AND lower(login->>\'v\') = ?';
+
+                    $where = $whereObject;
+                } else {
+                    $where['login'] = $login;
+                }
             }
             if ($UserRow = static::getUserWhere($Config, $where, false)) {
                 return $UserRow;
@@ -145,6 +212,7 @@ class Auth
     {
         $ip = ($_SERVER['REMOTE_ADDR'] ?? null);
         $now_date = date_create();
+        $login = mb_strtolower($login);
 
         if (($block_time = $Config->getSettings('h_time')) && ($error_count = (int)$Config->getSettings('error_count'))) {
             $BlockDate = date_create()->modify('-' . $block_time . 'minutes');
@@ -155,10 +223,10 @@ class Auth
             return static::$AuthStatuses['BLOCKED_BY_CRACKING_PROTECTION'];
         } else {
             if (($userRow = $userRow ?? Auth::getUserRowWithServiceRestriction(
-                        $login,
-                        $Config,
-                        $interface
-                    )) && static::checkUserPass(
+                    $login,
+                    $Config,
+                    $interface
+                )) && static::checkUserPass(
                     $pass,
                     $userRow['pass']
                 )) {
@@ -202,14 +270,6 @@ class Auth
     }
 
     public static function getUserById(Conf $Config, $userId)
-    {
-        $where = ['id' => $userId, 'is_del' => false, 'on_off' => "true"];
-        if ($userRow = static::getUserWhere($Config, $where)) {
-            return new User($userRow, $Config);
-        }
-    }
-
-    public static function simpleAuth(Conf $Config, $userId)
     {
         $where = ['id' => $userId, 'is_del' => false, 'on_off' => "true"];
         if ($userRow = static::getUserWhere($Config, $where)) {
@@ -264,7 +324,9 @@ class Auth
         }
         return null;
     }
-    public static function isShadowedCreator(Conf $Conf){
-        return static::$isShadowedCreatorVal??(static::$isShadowedCreatorVal = static::isUserNotItself() && static::getShadowedUser($Conf)?->isCreator());
+
+    public static function isShadowedCreator(Conf $Conf)
+    {
+        return static::$isShadowedCreatorVal ?? (static::$isShadowedCreatorVal = static::isUserNotItself() && static::getShadowedUser($Conf)?->isCreator());
     }
 }

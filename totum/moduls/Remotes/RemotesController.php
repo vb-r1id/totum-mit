@@ -30,7 +30,12 @@ class RemotesController extends Controller
             $remote = Model::getClearValuesWithExtract($remoteSelect);
             $remote_row = RealTables::decodeRow($remoteSelect);
             if ($remote['remotes_user']) {
-                if ($User = Auth::simpleAuth($this->Config, $remote['remotes_user'])) {
+                $remoteUser = $remote['remotes_user'];
+                if ($remoteUser === '-1') {
+                    $remoteUser = $request->getQueryParams()['ttm_user'] ?? 0;
+                }
+
+                if ($remoteUser && ($User = Auth::getUserById($this->Config, $remoteUser))) {
 
                     $tries = 0;
                     do {
@@ -58,6 +63,14 @@ class RemotesController extends Controller
             }
 
             switch ($remote['return']) {
+                case 'error':
+                    if ($error) {
+                        header($_SERVER['SERVER_PROTOCOL'] . ' 500 ' . $error, true, 500);
+                        echo $error;
+                    } else {
+                        echo is_array($data) ? json_encode($data, JSON_UNESCAPED_UNICODE) : $data;
+                    }
+                    break;
                 case 'simple':
                     if ($error) {
                         echo 'error';
@@ -75,10 +88,15 @@ class RemotesController extends Controller
                     echo $data;
                     break;
                 default:
-                    foreach ($data['headers'] as $h => $v) {
-                        header($h . ':' . $v);
+                    if (is_array($data)) {
+                        foreach ($data['headers'] ?? [] as $h => $v) {
+                            header((!is_numeric($h) ? $h . ':' : '') . $v);
+                        }
+                        echo $data['body'];
+                    } else {
+                        echo 'Error script answer format';
                     }
-                    echo $data['body'];
+
             }
         } else {
             echo $this->translate('Remote is not active or does not exist');
@@ -86,7 +104,7 @@ class RemotesController extends Controller
         }
     }
 
-    protected function action($User, $remote, $remote_row, $request)
+    protected function action($User, $remote, $remote_row, ServerRequestInterface $request)
     {
         $Totum = new Totum($this->Config, $User);
         $Totum->transactionStart();
@@ -105,6 +123,7 @@ class RemotesController extends Controller
                 'get' => $request->getQueryParams() ?? [],
                 'post' => $request->getParsedBody() ?? [],
                 'input' => (string)$request->getBody(),
+                'remoteIp' => $request->getServerParams()['REMOTE_ADDR'],
                 'headers' => ($headers = $request->getHeaders()) ? $headers : []
             ]
         );

@@ -42,6 +42,9 @@ class InsertTableActionsForms extends WriteTableActionsForms
 
         if (empty($hash) || !str_starts_with($hash,
                 'i-') || !($this->insertRowData = $this->getData($hash))) {
+            if ($hash && $this->post['method'] !== 'getTableData') {
+                throw new errorException('Reload');
+            }
             $this->createNewInsertRow();
         } else {
             $this->insertHash = $hash;
@@ -75,7 +78,7 @@ class InsertTableActionsForms extends WriteTableActionsForms
 
     public function getEditSelect($data = null, $q = null, $parentId = null, $type = null)
     {
-        $data = $this->post['data'] ?? [];
+        $data = $data ?? $this->post['data'] ?? [];
         $data['item'] = $this->getInsertRow($this->insertRowData);
         foreach ($data['item'] as &$v) {
             $v = $v['v'];
@@ -95,21 +98,27 @@ class InsertTableActionsForms extends WriteTableActionsForms
     {
         $data = is_string($this->post['data']) ? json_decode($this->post['data'], true) : $this->post['data'];
 
-        $data['params'] = $this->insertRowData['__fixedData'] + $data['params'];
+        $data['params'] = ($this->insertRowData['__fixedData']['x'] ?? []) + $data['params'];
 
         $data = ['rows' => [$this->getInsertRow($this->insertRowData,
             $data['params'] ?? [],
             [],
             $this->post['clearField'] ?? null)]];
+        $this->insertRowData = array_merge($this->insertRowData,
+            array_map(function ($v) {
+                if (is_array($v))
+                    return $v['v'];
+                return $v;
+            }, $data['rows'][0]));
 
-        $formats = $this->getTableFormats([]);
+        $formats = $this->getTableFormats($data['rows']);
         $data['params'] = $data['rows'][0];
         unset($data['rows']);
-        $data = $this->getValuesForClient($data, $formats, []);
+        $rawRow = $data['params'];
+        $data = $this->getValuesForClient($data, $formats);
         $data['params'] = ['__save' => ['v' => null]] + $data['params'];
 
-
-        $this->addLoadedSelects($data);
+        $data['selects'] = $this->getSelectsForLoading($data['params'], $rawRow, 'insertable');
         $data['f'] = $formats;
         return ['chdata' => $data, 'sess_hash' => $this->insertHash];
     }
@@ -133,7 +142,7 @@ class InsertTableActionsForms extends WriteTableActionsForms
 
             if (($this->FormsTableData['format_static']['t']['f']['p'] ?? false)) {
                 if (empty($this->extraParams)) {
-                    throw new errorException('The form requires link parameters to work.');
+                    throw new errorException($this->translate('The form requires link parameters to work.'));
                 }
             }
         }
@@ -141,15 +150,22 @@ class InsertTableActionsForms extends WriteTableActionsForms
         if (!empty($error)) {
             $result['error'] = $error;
         }
-        $row = $this->checkInsertRow()['row'];
-        $formats = $this->getTableFormats([]);
+
+
+        $data = $this->checkInsertRowQickForm($formats);
+        $row = $data['row'];
+        $formats = $data['formats'];
 
         $fields = [];
         foreach ($this->clientFields as $field) {
             if ($field['category'] === 'column') {
                 $fields[$field['name']] = ['category' => 'param'] + $field;
+                if (array_key_exists($field['name'], $this->insertRowData['__fixedData']['x'] ?? [])) {
+                    $fields[$field['name']]['editable'] = false;
+                }
             }
         }
+
 
         $data['params'] = array_intersect_key($row, $this->clientFields);
 
@@ -202,12 +218,10 @@ class InsertTableActionsForms extends WriteTableActionsForms
                 )) {
                 return 2;
             }
-            switch ($tableFormats['sections'][$sectionName]['status'] ?? null) {
-                case 'edit':
-                    return 2;
-                default:
-                    return 0;
-            }
+            return match ($tableFormats['sections'][$sectionName]['status'] ?? null) {
+                'edit' => 2,
+                default => 0,
+            };
         };
 
 
@@ -220,10 +234,6 @@ class InsertTableActionsForms extends WriteTableActionsForms
                         if (!key_exists($fieldName, $this->clientFields)) {
                             continue;
                         }
-                        if ($fieldName === 'test') {
-                            var_dump($section['fields']);
-                            die;
-                        }
 
                         if ($getSectionEditType($section['name']) && ($code = $this->FormsTableData['field_code_formats'][$fieldName] ?? $this->Table->getFields()[$fieldName]['format'] ?? null)) {
                             $FieldFormat = $this->CalcFieldFormat[$fieldName]
@@ -231,7 +241,7 @@ class InsertTableActionsForms extends WriteTableActionsForms
                                     = new CalculcateFormat($code));
                             $format = $FieldFormat->getFormat(
                                 $fieldName,
-                                $this->Table->getTbl()['params'],
+                                $rows[0],
                                 $this->Table->getTbl(),
                                 $this->Table
                             );
@@ -362,17 +372,20 @@ class InsertTableActionsForms extends WriteTableActionsForms
             ($this->insertRowData['__fixedData']['f'] ?? []) + ($this->insertRowData['__fixedData']['x'] ?? []),
             [])]];
 
-        $data = $this->Table->getValuesAndFormatsForClient($data, 'edit', []);
-        $data['params'] = ['__save' => ['v' => null]] + $data['rows'][0];
+        $formats = $this->getTableFormats($data['rows']);
+        $data = $this->getValuesForClient(['params' => $data['rows'][0]], $formats);
+        $data['f'] = $formats;
+        $data['params'] = ['__save' => ['v' => null]] + $data['params'];
         unset($data['rows']);
 
-        $this->addLoadedSelects($data);
-        $data['f'] = $this->getTableFormats([]);
+
         $data['sess_hash'] = $this->insertHash;
+
+
         return ['chdata' => $data, 'sess_hash' => $this->insertHash];
     }
 
-    public function checkInsertRow()
+    public function checkInsertRowQickForm(&$formats)
     {
         $insertData = $this->post['data'];
 
@@ -390,13 +403,26 @@ class InsertTableActionsForms extends WriteTableActionsForms
             $insertData,
             [],
             $this->post['clearField'] ?? null)]];
+        $formats = $this->getTableFormats($data['rows']);
 
-        $data = $this->Table->getValuesAndFormatsForClient($data, 'edit', []);
-        $row = $data['rows'][0];
+        $data = $this->getValuesForClient(['params' => $data['rows'][0]], $formats);
+        $row = $data['params'];
+
         $row['__save'] = ['v' => null];
-        $res = ['row' => $row, 'hash' => $this->insertHash];
-        $this->addLoadedSelects($res);
+        $res = ['row' => $row, 'hash' => $this->insertHash, 'formats' => $formats];
         return $res;
+    }
+
+    protected function getValuesForClient($data, &$formats, bool $isFirstLoad = false)
+    {
+        if (!empty($data['params'])) {
+            foreach ($data['params'] as $fName => &$value) {
+                $field = $this->Table->getFields()[$fName];
+                $this->fieldFormViewValues($field, $value, $data['params'], $formats, $fName, $isFirstLoad);
+            }
+            unset($value);
+        }
+        return $data;
     }
 
     private function getData(string $hash)

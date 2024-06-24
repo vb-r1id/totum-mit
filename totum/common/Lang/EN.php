@@ -6,13 +6,21 @@ use DateTime;
 
 class EN implements LangInterface
 {
-
     use TranslateTrait;
     use SearchTrait;
 
-    public const TRANSLATES = [];
-
-    public function dateFormat(DateTime $date, $fStr): string
+    public const TRANSLATES = array (
+  'Order field calculation errors' => 'Calculation order errors or reference to fields of deleted rows',
+  'Version adding error - file for version not found' => 'Version adding error — file for version not found',
+  'Creator warnings' => 'Notifications to the Administrator',
+  'BFL-log is on' => 'Log of errors and external accesses enabled',
+  'list-ubsubscribe-link-text' => 'Unsubscribe',
+  'list-ubsubscribe-Blocked-from-sending' => 'This email is blocked from sending',
+  'list-ubsubscribe-done' => 'Done',
+  'list-ubsubscribe-wrong-link' => 'Wrong link',
+  'OnlyOfficeSaveTimeoutError' => 'Unable to save due to lack of changes in the document. If you are editing a xlsx or another spreadsheet, please press Enter first to save the data in the editable cell or move focus to another cell.',
+);
+	public function dateFormat(DateTime $date, $fStr): string
     {
         $result = '';
         foreach (preg_split(
@@ -80,7 +88,10 @@ class EN implements LangInterface
     {
         return strtr(
             $s,
-            ['а' => 'a', 'б' => 'b', 'в' => 'v', 'г' => 'g', 'д' => 'd', 'е' => 'e', 'ё' => 'e', 'ж' => 'j', 'з' => 'z', 'и' => 'i', 'й' => 'y', 'к' => 'k', 'л' => 'l', 'м' => 'm', 'н' => 'n', 'о' => 'o', 'п' => 'p', 'р' => 'r', 'с' => 's', 'т' => 't', 'у' => 'u', 'ф' => 'f', 'х' => 'h', 'ц' => 'c', 'ч' => 'ch', 'ш' => 'sh', 'щ' => 'shch', 'ы' => 'y', 'э' => 'e', 'ю' => 'yu', 'я' => 'ya', 'ъ' => '', 'ь' => '']
+            [
+			'ß'=>'ss', 'ä'=>'a', 'ü'=>'u', 'ö'=>'o', 
+			'ñ'=>'ny',
+			'а' => 'a', 'б' => 'b', 'в' => 'v', 'г' => 'g', 'д' => 'd', 'е' => 'e', 'ё' => 'e', 'ж' => 'j', 'з' => 'z', 'и' => 'i', 'й' => 'y', 'к' => 'k', 'л' => 'l', 'м' => 'm', 'н' => 'n', 'о' => 'o', 'п' => 'p', 'р' => 'r', 'с' => 's', 'т' => 't', 'у' => 'u', 'ф' => 'f', 'х' => 'h', 'ц' => 'c', 'ч' => 'ch', 'ш' => 'sh', 'щ' => 'shch', 'ы' => 'y', 'э' => 'e', 'ю' => 'yu', 'я' => 'ya', 'ъ' => '', 'ь' => '']
         );
     }
 }

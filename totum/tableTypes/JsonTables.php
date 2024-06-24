@@ -113,68 +113,74 @@ abstract class JsonTables extends aTable
         return [];
     }
 
-    public function isTblUpdated($level = 0, $force = false)
+    public function isTblUpdated($level = 0, $calcLog = null)
     {
-        if ($this->isTableDataChanged || $this->isTableAdding) {
+        if ($this->isTableDataChanged || $this->isTableAdding || !key_exists('params', $this->savedTbl)) {
             $this->updated = $this->getUpdatedJson();
-
+            $tableChanges = $this->isTableDataChanged;
             /*Возможно, здесь тоже стоит разнести сохранение и onSaveTable, но логика сложная и можно поломать пересчеты неочевидным образом*/
-            if ($this->isOnSaving) {
-                if ($this->Cycle) {
-                    $this->Cycle->saveTables();
-                    $this->updateReceiverTables($level);
+
+            try {
+                if ($this->isOnSaving) {
+                    if ($this->Cycle) {
+                        $this->Cycle->saveTables(log: $this->CalculateLog);
+                        $this->updateReceiverTables($level);
+                    } else {
+                        $this->saveTable();
+                    }
                 } else {
-                    $this->saveTable();
-                }
-            } else {
-                /*Это верхний уровень сохранения пересчетов для этой таблицы*/
+                    /*Это верхний уровень сохранения пересчетов для этой таблицы*/
 
-                $this->isOnSaving = true;
-                $oldTbl = $this->loadedTbl;
+                    $this->isOnSaving = true;
+                    $oldTbl = $this->loadedTbl; //Exactly loaded! it's used for calculating changing in all process
 
-                if ($this->Cycle) {
-                    $this->Cycle->saveTables();
-                    $this->updateReceiverTables($level);
-                } else {
-                    $this->saveTable();
-                }
+                    if ($this->Cycle) {
+                        $this->Cycle->saveTables(log: $this->CalculateLog);
+                        $this->updateReceiverTables($level);
+                    } else {
+                        $this->saveTable();
+                    }
 
-                foreach ($this->tbl['rows'] as $id => $row) {
-                    $oldRow = ($oldTbl['rows'][$id] ?? []);
-                    if ($oldRow && (!empty($row['is_del']) && empty($oldRow['is_del']))) {
-                        $this->changeIds['deleted'][$id] = null;
-                    } elseif (!empty($oldRow) && empty($row['is_del'])) {
-                        //Здесь проставляется changed для web (только ли это в web нужно?) - можно облегчить!!!! - может, делать не здесь, а при изменении?
-                        if (Calculate::compare('!==', $oldRow, $row, $this->getLangObj())) {
-                            foreach ($row as $k => $v) {
-                                /*key_exists for $oldRow[$k] не использовать!*/
-                                if ($k !== 'n' && Calculate::compare('!==',
-                                        ($oldRow[$k] ?? null),
-                                        $v,
-                                        $this->getLangObj())) {
-                                    $this->changeIds['changed'][$id] = $this->changeIds['changed'][$id] ?? [];
-                                    $this->changeIds['changed'][$id][$k] = null;
+                    foreach ($this->tbl['rows'] as $id => $row) {
+                        $oldRow = ($oldTbl['rows'][$id] ?? []);
+                        if ($oldRow && (!empty($row['is_del']) && empty($oldRow['is_del']))) {
+                            $this->changeIds['deleted'][$id] = null;
+                        } elseif (!empty($oldRow) && empty($row['is_del'])) {
+                            //Здесь проставляется changed для web (только ли это в web нужно?) - можно облегчить!!!! - может, делать не здесь, а при изменении?
+                            if (Calculate::compare('!==', $oldRow, $row, $this->getLangObj())) {
+                                foreach ($row as $k => $v) {
+                                    /*key_exists for $oldRow[$k] не использовать!*/
+                                    if ($k !== 'n' && Calculate::compare('!==',
+                                            ($oldRow[$k] ?? null),
+                                            $v,
+                                            $this->getLangObj())) {
+                                        $this->changeIds['changed'][$id] = $this->changeIds['changed'][$id] ?? [];
+                                        $this->changeIds['changed'][$id][$k] = null;
+                                    }
                                 }
                             }
                         }
                     }
+
+                    $this->loadedTbl['rows'] = $oldTbl['rows'] ?? [];
+                    $deleted = array_flip(array_keys(array_diff_key(
+                        $oldTbl['rows'],
+                        $this->tbl['rows']
+                    )));
+                    $added = array_flip(array_keys(array_diff_key(
+                        $this->tbl['rows'],
+                        $oldTbl['rows']
+                    )));
+                    $this->changeIds['deleted'] = $this->changeIds['deleted'] + $deleted;
+                    $this->changeIds['added'] = $this->changeIds['added'] + $added;
+
+                    $this->isOnSaving = false;
                 }
-
-                $this->loadedTbl['rows'] = $oldTbl['rows'] ?? [];
-                $deleted = array_flip(array_keys(array_diff_key(
-                    $oldTbl['rows'],
-                    $this->tbl['rows']
-                )));
-                $added = array_flip(array_keys(array_diff_key(
-                    $this->tbl['rows'],
-                    $oldTbl['rows']
-                )));
-                $this->changeIds['deleted'] = $this->changeIds['deleted'] + $deleted;
-                $this->changeIds['added'] = $this->changeIds['added'] + $added;
-
-                $this->isOnSaving = false;
+                return $tableChanges ?: true;
+            } catch (\Exception $e) {
+                $calcLog($tableChanges ?: true);
+                throw $e;
             }
-            return true;
         } else {
             return false;
         }
@@ -193,7 +199,7 @@ abstract class JsonTables extends aTable
 
         $this->savedUpdated = $updated ?? $this->savedUpdated;
         $this->updated = $this->getUpdatedJson();
-        $this->setIsTableDataChanged(true);
+        $this->setIsTableDataChanged("TABLE_DUPLICATED");
     }
 
     /**
@@ -324,7 +330,7 @@ abstract class JsonTables extends aTable
 
             $SavedRows = $newRows;
             unset($newRows);
-            $this->setIsTableDataChanged(true);
+            $this->setIsTableDataChanged('REODERED');
             $this->changeIds['reordered'] = true;
         }
 
@@ -348,6 +354,11 @@ abstract class JsonTables extends aTable
                     throw new errorException($this->translate('Error processing field insert: [[%s]]',
                         $insertCalcs->getError()));
                 }
+
+                if ($insertList === '' || is_null($insertList)) {
+                    $insertList = [];
+                }
+
                 if (!is_array($insertList)) {
                     throw new errorException($this->translate('The [[insert]] field should return list - Table [[%s]]',
                         $this->tableRow['title']));
@@ -365,7 +376,7 @@ abstract class JsonTables extends aTable
                 if (in_array($this->fields['insert']['type'], ['select', 'tree', 'listRow'])) {
                     $type = SORT_REGULAR;
                 }
-                if (count(array_unique(
+                if (count(@array_unique(
                         $insertList,
                         $type
                     )) !== count($insertList)) {
@@ -384,7 +395,11 @@ abstract class JsonTables extends aTable
                 $newRow['_E'] = true;
             }
             if (!empty($insertField)) {
-                if (key_exists('c', $row['insert'])) {
+                if (is_null($row['insert'] ?? null)) {
+                    $newRow['_E'] = true;
+                    $c = null;
+                    $newRow['insert']['v'] = null;
+                } elseif (key_exists('c', $row['insert'])) {
                     $c = $row['insert']['c'];
                 } else {
                     $c = $row['insert']['v'];
@@ -409,7 +424,7 @@ abstract class JsonTables extends aTable
                             continue;
                         } else {
                             if (empty($row['InsDel'])) {
-                                $this->setIsTableDataChanged(true);
+                                $this->setIsTableDataChanged('INSERT_ROW_DELETED id ' . $row['id']);
                                 $this->changeIds['changed'][$row['id']] = null;
                             }
                             $newRow['InsDel'] = true;
@@ -421,7 +436,7 @@ abstract class JsonTables extends aTable
 
             if (!empty($row['is_del']) || $isDeletedRow = ($remove && in_array($row['id'], $remove))) {
                 if ($isDeletedRow ?? null) {
-                    $this->setIsTableDataChanged(true);
+                    $this->setIsTableDataChanged('ROW_DELETED id ' . $row['id']);
                     $aLogDelete = function ($id) use ($channel) {
                         if ($this->tableRow['type'] !== 'tmp'
                             && (in_array($channel, ['web', 'xml']) || $this->recalculateWithALog)
@@ -435,7 +450,7 @@ abstract class JsonTables extends aTable
                             );
                         }
                     };
-                    switch ($this->tableRow['deleting']) {
+                    switch ($this->getDeleteMode()) {
                         case 'none':
                             if ($channel !== 'inner') {
                                 throw new errorException($this->translate('You are not allowed to delete from this table'));
@@ -454,7 +469,7 @@ abstract class JsonTables extends aTable
                             break;
                     }
                 } elseif (in_array($row['id'], $restore)) {
-                    $this->setIsTableDataChanged(true);
+                    $this->setIsTableDataChanged('ROW_RESTORED');
                     $this->changeIds['restored'][$row['id']] = null;
                     $this->changeInOneRecalcIds['restored'][$row['id']] = null;
                     if ($this->tableRow['type'] !== 'tmp'
@@ -480,7 +495,7 @@ abstract class JsonTables extends aTable
                 $this->tbl['rows'][$newRow['id']] = $newRow;
                 $this->changeIds['added'][$newRow['id']] = null;
                 $this->changeInOneRecalcIds['added'][$newRow['id']] = null;
-                $this->setIsTableDataChanged(true);
+                $this->setIsTableDataChanged('INSERT_INSERTES_ROW id' . $newRow['id']);
             }
         }
         /***insert***/
@@ -522,7 +537,7 @@ abstract class JsonTables extends aTable
                 $this->changeInOneRecalcIds['added'][$newRow['id']] = null;
                 $this->changeIds['duplicated'][$id] = $newRow['id'];
                 $this->changeInOneRecalcIds['duplicated'][$id] = $newRow['id'];
-                $this->setIsTableDataChanged(true);
+                $this->setIsTableDataChanged('ROW_DUPLICATED', $newRow['id']);
             } else {
                 throw new errorException($this->translate('Row %s not found', $id));
             }
@@ -570,14 +585,14 @@ abstract class JsonTables extends aTable
 
                     $orderDuplicatesAfter[$after][$newRow['id']] = $newRow;
                     $modify[$newRow['id']] = $addRow;
-                    $this->setIsTableDataChanged(true);
+                    $this->setIsTableDataChanged('ROW_ADDED ' . $newRow['id']);
                 }
             } else {
                 foreach (($add ?? []) as $addRow) {
                     $newRow = ['id' => $getId($addRow), '_E' => true];
                     $this->tbl['rows'][$newRow['id']] = $newRow;
                     $modify[$newRow['id']] = $addRow;
-                    $this->setIsTableDataChanged(true);
+                    $this->setIsTableDataChanged('ROW_ADDED ' . $newRow['id']);
                 }
             }
             if ($channel === 'web' && $isCheck === true) {
@@ -607,7 +622,7 @@ abstract class JsonTables extends aTable
                 }
             }
             $this->tbl['rows'] = $newRows;
-            $this->setIsTableDataChanged(true);
+            $this->setIsTableDataChanged('ROWS_DUPLICATED', $orderDuplicatesAfter);
         }
 
         if (!empty($this->tableRow['with_order_field'])) {
@@ -661,7 +676,7 @@ abstract class JsonTables extends aTable
                 $isCheck
             );
 
-            $this->checkIsModified($oldVal, $thisRow[$column['name']]);
+            $this->checkIsModified($oldVal, $thisRow[$column['name']], $column['name'], $thisRow['id']);
 
             $this->addToALogModify(
                 $Field,
@@ -681,9 +696,14 @@ abstract class JsonTables extends aTable
             $newVal = $modify[$thisRow['id']][$column['name']] ?? null;
             $_channel = $channel;
 
+            $modify[$thisRow['id']] = $modify[$thisRow['id']] ?? [];
+            if (!is_array($modify[$thisRow['id']])) {
+                $modify[$thisRow['id']] = [];
+            }
+
             if (!key_exists(
                     $column['name'],
-                    $modify[$thisRow['id']] ?? []
+                    $modify[$thisRow['id']]
                 ) && $this->insertRowSetData && key_exists(
                     $column['name'],
                     $this->insertRowSetData
@@ -706,7 +726,7 @@ abstract class JsonTables extends aTable
                     $channel,
                     $this->tbl,
                     $thisRow,
-                    $this->insertRowSetData ?? $modify[$thisRow['id']] ?? []);
+                    $this->insertRowSetData ?? $modify[$thisRow['id']]);
             }
             unset($this->insertRowSetData[$column['name']]);
         };
@@ -750,7 +770,7 @@ abstract class JsonTables extends aTable
                     $isCheck
                 );
 
-                $this->checkIsModified($oldVal, $this->tbl['params'][$footerField['name']]);
+                $this->checkIsModified($oldVal, $this->tbl['params'][$footerField['name']], $footerField['name']);
 
                 $this->addToALogModify(
                     $Field,
@@ -1087,7 +1107,8 @@ abstract class JsonTables extends aTable
                             $field['name'],
                             $loadedTbl['rows'][$row['id']]
                         ) &&
-                        is_array($loadedTbl['rows'][$row['id']][$field['name']]) && key_exists('v', $loadedTbl['rows'][$row['id']][$field['name']])) {
+                        is_array($loadedTbl['rows'][$row['id']][$field['name']]) && key_exists('v',
+                            $loadedTbl['rows'][$row['id']][$field['name']])) {
                         if (Calculate::compare(
                             '!==',
                             $loadedTbl['rows'][$row['id']][$field['name']]['v'],
@@ -1118,8 +1139,15 @@ abstract class JsonTables extends aTable
                             'delete'
                         );
                     }
-                    if ($field['type'] === 'file' && $this->tableRow['deleting'] !== 'hide') {
-                        File::deleteFilesOnCommit($Oldrow[$field['name']]['v'], $this->getTotum()->getConfig());
+                    if ($field['type'] === 'file' && $this->getDeleteMode() !== 'hide') {
+                        File::deleteFilesOnCommit(
+                            Field::init($field,
+                                $this)->filterDuplicatedFiled(
+                                $Oldrow[$field['name']]['v'] ?? [],
+                                $Oldrow['id']
+                            )
+                            ,
+                            $this->getTotum()->getConfig());
                     }
                 }
 
@@ -1171,6 +1199,7 @@ abstract class JsonTables extends aTable
             ) || $this->fields[$field]['type'] === 'numeric' ? 'numeric' : 'text');
         };
 
+        /*order*/
         if (!empty($params['order'])) {
             $orders = [];
             foreach ($params['order'] as $of) {
@@ -1206,64 +1235,169 @@ abstract class JsonTables extends aTable
                 }
             };
         }
+
+
         $where = [];
         $isDelInFields = (key_exists(
                 'where',
                 $params
-            ) && count($params['where']) === 1 && $params['where'][0]['field'] === 'id' && $params['where'][0]['operator'] === '=');
+            ) && count($params['where']) === 1 && is_array($params['where'][0]) && key_exists('field',
+                $params['where'][0]) && $params['where'][0]['field'] === 'id' && $params['where'][0]['operator'] === '=');
 
         if (isset($params['where'])) {
-            foreach ($params['where'] as $wI) {
-                $field = $wI['field'];
-                $operator = $wI['operator'];
-                $value = $wI['value'];
 
-
-                if ($value === '*ALL*') {
-                    continue;
-                }
-                if ($field === 'id') {
-                    switch ($operator) {
-                        case '=':
-                            $value = (array)$value;
-                            foreach ($value as &$val) {
-                                if(is_array($val)){
-                                    throw new errorException($this->translate('An invalid value for id filtering was passed to the select function.'));
-                                }
-                                $val = strval($val);
-                            }
-                            unset($val);
-                            $array = array_intersect_key($array, array_flip(array_unique($value)));
-
-                            continue 2;
-                        case '!=':
-                            $value = (array)$value;
-                            foreach ($value as &$val) {
-                                $val = strval($val);
-                            }
-                            unset($val);
-
-                            $array = array_diff_key($array, array_flip(array_unique($value)));
-                            continue 2;
-                    }
-                } elseif ($field === 'is_del') {
-                    $isDelInFields = true;
-                }
-
-
+            $checkFieldAndValue = function (string $field, $value) {
                 if (!array_key_exists($field, $this->sortedFields['column']) && !Model::isServiceField($field)
                 ) {
                     throw new errorException($this->translate('The [[%s]] field is not found in the [[%s]] table.',
                         [$field, $this->tableRow['title']]));
                 }
-                $_array = true;
-                if (in_array($field, Model::serviceFields)) {
-                    $_array = false;
+            };
+
+            /**
+             * @param $_level
+             * @return array[ string where, array $params ]
+             * @throws errorException
+             */
+            $getWhereForlevel = function ($_level) use ($checkFieldAndValue, &$getWhereForlevel): array {
+                $type = $_level['type'];
+                $params = [];
+                unset($_level['type']);
+                $whereConds = [];
+                foreach ($_level as $cond) {
+                    if (key_exists('operator', $cond)) {
+                        if (($cond['right']['type'] ?? '') !== 'fieldName') {
+                            list($_cond, $_params) = $this->processFieldWhere(
+                                $cond['left']['value'],
+                                $cond['operator'],
+                                $cond['right']['value']
+                            );
+                            if ($_cond) {
+                                $_cond = '(' . implode(' AND ', $_cond) . ')';
+                                array_push($params, ...$_params);
+                                $whereConds[] = $_cond;
+                            }
+                        } else {
+                            if ($cond['operator'] === '=') {
+                                throw new errorException('If you matching fieldName by fieldName use operator ==. Operator = with includes is not available');
+                            }
+                            throw new errorException('select by matching DB fields is not done yet');
+                        }
+                    } else {
+                        list($_cond, $_params) = $getWhereForlevel($cond);
+                        if ($_cond) {
+                            $whereConds[] = $_cond;
+                            array_push($params, ...$_params);
+                        }
+                    }
+
+                }
+                $type = match ($type) {
+                    '||' => ' OR ',
+                    '&&' => ' AND '
+                };
+                return ['(' . implode($type, $whereConds) . ')', $params];
+            };
+
+            $getCheckNeededRow = function ($qrow): callable {
+                $checkQrowLevel = function ($row, $_level) use (&$checkQrowLevel): bool {
+                    $type = $_level['type'];
+                    unset($_level['type']);
+                    foreach ($_level as $cond) {
+                        if (key_exists('operator', $cond)) {
+                            if (($cond['right']['type'] ?? '') !== 'fieldName') {
+                                $isTrue = Calculate::compare($cond['operator'],
+                                    Model::isServiceField($cond['left']['value']) ? $row[$cond['left']['value']] : $row[$cond['left']['value']]['v'],
+                                    $cond['right']['value'],
+                                    $this->getLangObj());
+                            } else {
+                                throw new errorException('select by matching DB fields is not done yet');
+                            }
+                        } else {
+                            $isTrue = $checkQrowLevel($row, $cond);
+                        }
+                        if ($type === '&&') {
+                            if (!$isTrue) {
+                                return false;
+                            }
+                        } else {
+                            if ($isTrue) {
+                                return true;
+                            }
+                        }
+                    }
+                    if ($type === '&&') {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                };
+                return function ($row) use ($qrow, $checkQrowLevel) {
+                    return $checkQrowLevel($row, $qrow);
+                };
+            };
+
+            foreach ($params['where'] as $wI) {
+                if (!is_array($wI)) {
+                    throw new errorException($this->translate('The [[%s]] parameter is not correct.', 'where'));
                 }
 
-                $where[] = ['field' => $field, 'isArray' => $_array, 'operator' => $operator, 'val' => $value];
+                if (key_exists('qrow', $wI)) {
+                    $where[] = $getCheckNeededRow($wI['qrow']);
+                } else {
+                    $field = $wI['field'];
+                    $operator = $wI['operator'];
+                    $value = $wI['value'];
+
+
+                    if ((array)$value === ['*ALL*']) {
+                        continue;
+                    }
+
+                    $checkFieldAndValue($field, $value);
+
+                    if ($field === 'id') {
+                        switch ($operator) {
+                            case '=':
+                                $value = (array)$value;
+                                foreach ($value as &$val) {
+                                    if (is_array($val)) {
+                                        throw new errorException($this->translate('An invalid value for id filtering was passed to the select function.'));
+                                    }
+                                    $val = strval($val);
+                                }
+                                unset($val);
+                                $array = array_intersect_key($array, array_flip(array_unique($value)));
+
+                                continue 2;
+                            case '!=':
+                                $value = (array)$value;
+                                foreach ($value as &$val) {
+                                    $val = strval($val);
+                                }
+                                unset($val);
+
+                                $array = array_diff_key($array, array_flip(array_unique($value)));
+                                continue 2;
+                        }
+
+                    } elseif ($field === 'is_del') {
+                        $isDelInFields = true;
+                    }
+                    $where[] = [
+                        'field' => $field,
+                        'isArray' => !in_array($field, Model::serviceFields),
+                        'operator' => $operator,
+                        'val' => $value];
+                }
             }
         }
+
+        $offset = ($params['offset']) ?? 0;
+        if (!(ctype_digit(strval($offset)))) {
+            throw new errorException($this->translate('The %s parameter must be a number.', 'offset'));
+        }
+        $offset = (int)$offset;
 
         if ($returnType === 'field' || $returnType === 'row') {
             if (isset($fOrdering)) {
@@ -1286,17 +1420,28 @@ abstract class JsonTables extends aTable
 
                 $checkedTrue = true;
                 foreach ($where as $w) {
-                    $a = $row[$w['field']] ?? null;
-                    if ($w['isArray']) {
-                        $a = $a['v'] ?? null;
-                    }
-                    if (!Calculate::compare($w['operator'], $a, $w['val'], $this->getLangObj())) {
-                        $checkedTrue = false;
-                        break;
+                    if (is_callable($w)) {
+                        if (!$w($row)) {
+                            $checkedTrue = false;
+                            break;
+                        }
+                    } else {
+                        $a = $row[$w['field']] ?? null;
+                        if ($w['isArray']) {
+                            $a = $a['v'] ?? null;
+                        }
+                        if (!Calculate::compare($w['operator'], $a, $w['val'], $this->getLangObj())) {
+                            $checkedTrue = false;
+                            break;
+                        }
                     }
                 }
 
                 if ($checkedTrue) {
+                    if ($offset) {
+                        $offset--;
+                        continue;
+                    }
                     if ($returnType === 'row') {
                         return $sectionReplaces($row);
                     } else {
@@ -1306,11 +1451,7 @@ abstract class JsonTables extends aTable
             }
             return null;
         } else {
-            $offset = ($params['offset']) ?? 0;
-            if (!(ctype_digit(strval($offset)))) {
-                throw new errorException($this->translate('The %s parameter must be a number.', 'offset'));
-            }
-            $offset = (int)$offset;
+
 
             $limit = ($params['limit']) ?? '';
             if ($limit !== '') {
@@ -1340,14 +1481,21 @@ abstract class JsonTables extends aTable
                 } else {
                     $row['is_del'] = $row['is_del'] ?? false;
                 }
-                foreach ($where as $w) {
-                    $a = $row[$w['field']] ?? null;
-                    if ($w['isArray']) {
-                        $a = $a['v'] ?? null;
-                    }
 
-                    if (!Calculate::compare($w['operator'], $a, $w['val'], $this->getLangObj())) {
-                        continue 2;
+                foreach ($where as $w) {
+                    if (is_callable($w)) {
+                        if (!$w($row)) {
+                            continue 2;
+                        }
+                    } else {
+                        $a = $row[$w['field']] ?? null;
+                        if ($w['isArray']) {
+                            $a = $a['v'] ?? null;
+                        }
+
+                        if (!Calculate::compare($w['operator'], $a, $w['val'], $this->getLangObj())) {
+                            continue 2;
+                        }
                     }
                 }
 

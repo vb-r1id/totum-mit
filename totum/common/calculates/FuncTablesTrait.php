@@ -3,6 +3,7 @@
 namespace totum\common\calculates;
 
 use PDO;
+use totum\common\Crypt;
 use totum\common\errorException;
 use totum\common\Field;
 use totum\models\TablesFields;
@@ -11,6 +12,25 @@ use totum\tableTypes\RealTables;
 
 trait FuncTablesTrait
 {
+
+    protected function funcTableUrl(string $params): string
+    {
+        $params = $this->getParamsArray($params);
+        $this->__checkNotArrayParams($params, ['table', 'cycle', 'protocol']);
+        $this->__checkTableIdOrName($params['table'] ?? '', 'table');
+
+        $protocol = ($params['protocol'] ?? 'https') !== 'http' ? 'https' : 'http';
+        $tableRow = $this->Table->getTotum()->getTableRow($params['table']);
+
+        $tablePath = $tableRow['top'] . '/' . $tableRow['id'];
+        if ($tableRow['type'] === 'calcs') {
+            $this->__checkNotEmptyParams($params, ['cycle']);
+            $top = $this->Table->getTotum()->getTableRow($tableRow['tree_node_id'])['top'];
+            $tablePath = $top . '/' . $tableRow['tree_node_id'] . '/' . $params['cycle'] . '/' . $tableRow['id'];
+        }
+
+        return $protocol . '://' . $this->Table->getTotum()->getConfig()->getFullHostName() . '/Table/' . $tablePath;
+    }
 
     protected function funcGetTableSource(string $params)
     {
@@ -59,7 +79,8 @@ trait FuncTablesTrait
         $query = <<<SQL
 select table_name->>'v' as table_name, name->>'v' as name, version->>'v' as version from tables_fields where data->'v'->'code'->'==usedFields=='-> :table ->> :field = '1'
            OR data->'v'->'codeSelect'->'==usedFields=='-> :table ->> :field = '1'
-            OR data->'v'->'codeAction'->'==usedFields=='-> :table ->> :field = '1';
+            OR data->'v'->'codeAction'->'==usedFields=='-> :table ->> :field = '1'
+            OR data->'v'->'format'->'==usedFields=='-> :table ->> :field = '1';
 SQL;
 
 
@@ -120,7 +141,12 @@ SQL;
                     $params['width'] ?? null,
                     $params['refresh'] ?? false,
                     ['header' => $params['header'] ?? true,
-                        'footer' => $params['footer'] ?? true]
+                        'footer' => $params['footer'] ?? true,
+                        'topbuttons' => $params['topbuttons'] ?? true,
+                        'bottombuttons' => $params['bottombuttons'] ?? true,
+                        'pointing' => $params['pointing'] ?? null,
+                        'hidedots' => $this->__checkBoolOrNull($params['hidedots'] ?? null),
+                    ]
                 );
             } else {
                 $table = [
@@ -135,7 +161,12 @@ SQL;
                     $table,
                     $params['refresh'] ?? false,
                     ['header' => $params['header'] ?? true,
-                        'footer' => $params['footer'] ?? true]
+                        'footer' => $params['footer'] ?? true,
+                        'topbuttons' => $params['topbuttons'] ?? true,
+                        'bottombuttons' => $params['bottombuttons'] ?? true,
+                        'pointing' => $params['pointing'] ?? null,
+                        'hidedots' => $this->__checkBoolOrNull($params['hidedots'] ?? null),
+                    ]
                 );
             }
         }
@@ -235,6 +266,8 @@ SQL;
                 }
             }
             if (empty($table)) {
+                $this->__checkNotEmptyParams($params, ['hash']);
+                $this->__checkNotArrayParams($params, ['hash']);
                 $table = $this->Table->getTotum()->getTable($tableRow, $params['hash']);
             }
             $table->reCalculateFromOvers($inVars, $this->Table->getCalculateLog());
@@ -333,10 +366,52 @@ SQL;
         return $vals;
     }
 
+    protected function processFieldsForRowSelect(&$params): void
+    {
+        foreach (['field', 'sfield'] as $_fn) {
+            if (empty($params[$_fn])) {
+                continue;
+            }
+            foreach ($params[$_fn] as &$field) {
+                $c = $this->getCodes($field, ['as']);
+                switch (count($c)) {
+                    case 1:
+                        $val = $this->__getValue($c[0]);
+                        $field = $val;
+                        break;
+                    case 3:
+                        if ($c[1]['type'] === 'as') {
+                            $_cv1 = $this->__getValue($c[0]);
+                            $_cv2 = $this->__getValue($c[2]);
+                            if (is_array($_cv1) || is_array($_cv2)) {
+                                throw new errorException($this->translate('The parameter [[%s]] should [[not]] be of type row/list.',
+                                    $_fn));
+                            }
+                            if (is_bool($_cv1)) {
+                                $_cv1 = $_cv1 ? 'true' : 'false';
+                            }
+                            if (is_bool($_cv2)) {
+                                $_cv2 = $_cv2 ? 'true' : 'false';
+                            }
+                            $field = [$_cv1, $_cv2];
+                            break;
+                        }
+                    default:
+                        throw new errorException($this->translate('TOTUM-code format error [[%s]].',
+                            $this->getReadCodeForLog($field)));
+                }
+            }
+            unset($field);
+        }
+    }
+
     protected
     function funcSelectRow(string $params)
     {
-        $params = $this->getParamsArray($params, ['where', 'order', 'field', 'sfield', 'tfield']);
+        $params = $this->getParamsArray($params, ['where', 'order', 'field', 'sfield', 'tfield'], ['field', 'sfield']);
+
+        $this->processFieldsForRowSelect($params);
+
         if (!empty($params['fields'])) {
             $params['field'] = array_merge($params['field'] ?? [], (array)$params['fields']);
         }
@@ -351,6 +426,7 @@ SQL;
             $this->row['id'] ?? null,
             get_class($this) === Calculate::class
         );
+
         if (!empty($row['__sectionFunction'])) {
             $row = $row['__sectionFunction']();
         }
@@ -360,7 +436,9 @@ SQL;
     protected
     function funcSelectRowList(string $params)
     {
-        $params = $this->getParamsArray($params, ['where', 'order', 'field', 'sfield', 'tfield']);
+        $params = $this->getParamsArray($params, ['where', 'order', 'field', 'sfield', 'tfield'], ['field', 'sfield']);
+
+        $this->processFieldsForRowSelect($params);
 
         if (!empty($params['fields'])) {
             $params['field'] = array_merge($params['field'] ?? [], (array)$params['fields']);
@@ -491,5 +569,153 @@ SQL;
             $this->row['id'] ?? null,
             $this::class === Calculate::class
         );
+    }
+
+
+    /*Добавить проверку действие/расчет при добавлении параметра target*/
+    protected function funcLinkToForm($params)
+    {
+        $params = $this->getParamsArray($params);
+
+        $this->__checkRequiredParams($params, ['path']);
+        $this->__checkNotArrayParams($params, ['path']);
+        $this->__checkNotArrayParams($params, ['protocol', 'target']);
+
+
+        $formData = $this->Table->getTotum()->getTable('ttm__forms')->getByParams(
+            ['where' => [
+                ['field' => 'path_code', 'operator' => '=', 'value' => $params['path']]
+            ],
+                'field' => ['type']],
+            'row'
+        );
+
+        if (!$formData) {
+            throw new errorException($this->translate('Form is not found.'));
+        }
+        if ($formData['type'] != '') {
+            throw new errorException($this->translate('For temporary tables forms only.'));
+        }
+        $d = [];
+
+        if (!empty($params['data'])) {
+            $d['d'] = $params['data'];
+        }
+        if (!empty($params['params'])) {
+            $d['p'] = $params['params'];
+        }
+
+        $t = $params['path'];
+        if ($d) {
+            $d['t'] = $params['path'];
+
+            $t .= '?d=' . urlencode(Crypt::getCrypted(
+                    json_encode($d, JSON_UNESCAPED_UNICODE),
+                    $this->Table->getTotum()->getConfig()->getCryptSolt()
+                ));
+        }
+        $link = $this->Table->getTotum()->getConfig()->getAnonymHost('Forms') . '/Forms/' . $t;
+
+        if (!empty($params['target'])) {
+            $this->Table->getTotum()->addToInterfaceLink(
+                ($params['protocol'] ?? 'https') . '://' . $link,
+                $params['target']
+            );
+        } else {
+            $protocol = empty($params['protocol']) ? '' : ($params['protocol'] . '://');
+            return $protocol . $link;
+        }
+    }
+
+    protected function funcLinkToQuickForm($params)
+    {
+        $params = $this->getParamsArray($params);
+
+        $this->__checkRequiredParams($params, ['path']);
+        $this->__checkNotArrayParams($params, ['path']);
+        $this->__checkNotArrayParams($params, ['protocol', 'target']);
+
+
+        $formData = $this->Table->getTotum()->getTable('ttm__forms')->getByParams(
+            ['where' => [
+                ['field' => 'path_code', 'operator' => '=', 'value' => $params['path']]
+            ],
+                'field' => ['type']],
+            'row'
+        );
+
+        if (!$formData) {
+            throw new errorException($this->translate('Form is not found.'));
+        }
+        if ($formData['type'] != 'quick') {
+            throw new errorException($this->translate('For quick forms only.'));
+        }
+        $d = [];
+
+        if (!empty($params['fields'])) {
+            $d['f'] = $params['fields'];
+        }
+        if (!empty($params['fixed'])) {
+            $d['x'] = $params['fixed'];
+        }
+
+        $t = $params['path'];
+        if ($d) {
+            $d['t'] = $params['path'];
+
+            $t .= '?d=' . urlencode(Crypt::getCrypted(
+                    json_encode($d, JSON_UNESCAPED_UNICODE),
+                    $this->Table->getTotum()->getConfig()->getCryptSolt()
+                ));
+        }
+        $link = $this->Table->getTotum()->getConfig()->getAnonymHost('Forms') . '/Forms/' . $t;
+        if (!empty($params['target'])) {
+            $this->Table->getTotum()->addToInterfaceLink(
+                ($params['protocol'] ?? 'https') . '://' . $link,
+                $params['target']
+            );
+        } else {
+            $protocol = empty($params['protocol']) ? '' : ($params['protocol'] . '://');
+            return $protocol . $link;
+        }
+
+    }
+
+    protected function funcLinkToAnonymTable($params)
+    {
+        $params = $this->getParamsArray($params);
+        $tableRow = $this->__checkTableIdOrName($params['table'], 'table');
+        $this->__checkNotArrayParams($params, ['protocol', 'target']);
+
+        if ($tableRow['type'] === 'calcs') {
+            throw new errorException($this->translate('Access to tables in a cycle through this module is not available.'));
+        }
+        $d = [];
+        if (!empty($params['data'])) {
+            $d['d'] = $params['data'];
+        }
+        if (!empty($params['params'])) {
+            $d['p'] = $params['params'];
+        }
+        $t = $tableRow['id'];
+        if ($d) {
+            $d['t'] = $tableRow['id'];
+
+            $t = $tableRow['id'] . '?d=' . urlencode(Crypt::getCrypted(
+                    json_encode($d, JSON_UNESCAPED_UNICODE),
+                    $this->Table->getTotum()->getConfig()->getCryptSolt()
+                ));
+        }
+        $link = $this->Table->getTotum()->getConfig()->getAnonymHost('An') . '/' . $this->Table->getTotum()->getConfig()->getAnonymModul() . '/' . $t;
+        if (!empty($params['target'])) {
+            $this->Table->getTotum()->addToInterfaceLink(
+                ($params['protocol'] ?? 'https') . '://' . $link,
+                $params['target'],
+                $tableRow['title']
+            );
+        } else {
+            $protocol = empty($params['protocol']) ? '' : ($params['protocol'] . '://');
+            return $protocol . $link;
+        }
     }
 }

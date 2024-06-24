@@ -13,11 +13,13 @@ use totum\common\Auth;
 use totum\common\Field;
 use totum\common\Lang\RU;
 use totum\common\logs\CalculateLog;
+use totum\common\Services\ServicesConnector;
 use totum\common\WithPathMessTrait;
 use totum\common\sql\SqlException;
 use totum\common\tableSaveOrDeadLockException;
 use totum\common\Totum;
 use totum\config\Conf;
+use totum\fieldTypes\File;
 use totum\models\Table;
 use totum\models\Tree;
 use totum\models\UserV;
@@ -215,6 +217,9 @@ class TableController extends interfaceController
                 'id, title, type, tree_node_id, sort, icon, name',
                 '(sort->>\'v\')::numeric'
             ) as $t) {
+                if ($t['type'] === 'calcs') {
+                    continue;
+                }
                 $tree[] = [
                     'id' => 'table' . $t['id']
                     , 'href' => $t['id']
@@ -242,7 +247,7 @@ class TableController extends interfaceController
             array_multisort($ords, $tree);
         }
 
-        if ($this->Cycle) {
+        if ($this->Cycle && key_exists($this->Cycle->getCyclesTableId(), $this->User->getTreeTables())) {
             $cyclesTableId = $this->Cycle->getCyclesTableId();
             $idHref = 'Cycle' . $this->Cycle->getId();
             $CyclesTable = $this->Cycle->getCyclesTable();
@@ -277,7 +282,8 @@ class TableController extends interfaceController
                     $ord = $field['ord'];
                     $dec = 1;
                     while (key_exists($ord, $orderedInners)) {
-                        $ord += 5 * (1 / (10 ^ $dec));
+                        $ord += 5 * (1 / (10 ** $dec));
+                        $ord = (string)$ord;
                         $dec++;
                     }
 
@@ -296,10 +302,12 @@ class TableController extends interfaceController
             }
 
             $tables = $this->Cycle->getViewTablesWithOrds();
+
             foreach ($tables as $ord => $table) {
                 $dec = 1;
                 while (key_exists($ord, $orderedInners)) {
-                    $ord += 5 * (1 / (10 ^ $dec));
+                    $ord += 5 * (1 / (10 ** $dec));
+                    $ord = (string)$ord;
                     $dec++;
                 }
                 $orderedInners[$ord] = $table;
@@ -392,10 +400,9 @@ class TableController extends interfaceController
                 $suDo = Auth::isCanBeOnShadow($this->User);
                 if ($suDo || $userManager) {
                     if ($suDo) {
-                        $reUsers = Auth::getUsersForShadow($this->Config, $this->User);
                         $this->__addAnswerVar(
                             'reUsers',
-                            array_combine(array_column($reUsers, 'id'), array_column($reUsers, 'fio'))
+                            true
                         );
                         $this->__addAnswerVar('isCreatorNotItself', Auth::isUserNotItself());
                     } else {
@@ -534,6 +541,10 @@ class TableController extends interfaceController
 
     public function actionTable(ServerRequestInterface $request)
     {
+        if ($this->Config->getSettings('bfl')) {
+            $this->Totum->addCreatorWarnings('BFL-log is on');
+        }
+
         try {
             $this->checkTableByUri($request, true);
         } catch (criticalErrorException $e) {
@@ -546,10 +557,16 @@ class TableController extends interfaceController
         if (!$this->Table) {
             return;
         }
+
         /*Основная часть отдачи таблицы*/
         if (empty($error)) {
             try {
                 $Actions = $this->getTableActions($request, 'getFullTableData');
+
+                if ($Actions->isTableServiceOn('pdfdocpreview')) {
+                    $this->checkIsPreviewFileRequest($request);
+                }
+
                 $result = $Actions->getFullTableData(true);
             } catch (criticalErrorException $exception) {
                 $this->clearTotum($request, true);
@@ -563,7 +580,7 @@ class TableController extends interfaceController
             }
         }
 
-        $result['isCreatorView'] = $this->User->isCreator();
+        $result['isCreatorView'] = $Actions->isCreatorView();
         $result['checkIsUpdated'] = (in_array(
             $this->Table->getTableRow()['actual'],
             ['none', 'disable']
@@ -696,53 +713,61 @@ class TableController extends interfaceController
                 $tableId = $tableMatches[3];
                 if (!is_numeric($tableId) && ($calcsTableRow = $this->Totum->getTableRow($tableId))) {
                     $tableId = $calcsTableRow['id'];
+                    if ($tableMatches[1] === '0') {
+                        $queryWith0 = true;
+                    }
                 }
+
                 if (!is_numeric($tableMatches[1])) {
                     $tableMatches[1] = $this->Totum->getTableRow($tableMatches[1])['id'];
                 } elseif ($tableMatches[1] === '0') {
                     $tableMatches[1] = ($calcsTableRow ?? $this->Totum->getTableRow($tableId))['tree_node_id'];
                 }
-
             }
 
-            $this->Cycle = $this->Totum->getCycle($tableMatches[2], $tableMatches[1]);
-            if (!$this->Cycle->loadRow()) {
-                throw new errorException($this->translate('Cycle [[%s]] is not found.', ''));
-            }
-
-            if (!array_key_exists($tableId, $this->User->getTables())) {
-                throw new errorException($this->translate('Access to the table is denied.'));
+            if (!empty($queryWith0) && $calcsTableRow['type'] !== 'calcs') {
+                $checkTreeTable($calcsTableRow['id']);
             } else {
-                $this->onlyRead = $this->User->getTables()[$tableId] === 0;
 
-                //Проверка доступа к циклу
-
-                if (!$this->User->isCreator() && !empty($this->Cycle->getCyclesTable()->getFields()['creator_id']) && in_array(
-                        $this->Cycle->getCyclesTable()->getTableRow()['cycles_access_type'],
-                        [1, 2, 3]
-                    )) {
-                    //Если не связанный пользователь
-                    if (count(array_intersect(
-                            $this->Cycle->getRow()['creator_id']['v'],
-                            $this->User->getConnectedUsers()
-                        )) === 0) {
-                        if ($this->Cycle->getCyclesTable()->getTableRow()['cycles_access_type'] === '3') {
-                            $this->onlyRead = true;
-                        } else {
-                            throw new errorException($this->translate('Access to the cycle is denied.'));
-                        }
-                    }
+                $this->Cycle = $this->Totum->getCycle($tableMatches[2], $tableMatches[1]);
+                if (!$this->Cycle->loadRow()) {
+                    throw new errorException($this->translate('Cycle [[%s]] is not found.', ''));
                 }
 
-                if ($tableRow = $this->Config->getTableRow($tableId)) {
-                    if ($tableRow['type'] === 'calcs') {
-                        $this->Table = $this->Cycle->getTable($tableRow);
-                    } elseif ($this->tabButton) {
-                        $this->Table = $this->Totum->getTable($tableRow);
-                    } else {
-                        throw new errorException($this->translate('Wrong path to the table'));
+                if (!array_key_exists($tableId, $this->User->getTables())) {
+                    throw new errorException($this->translate('Access to the table is denied.'));
+                } else {
+                    $this->onlyRead = $this->User->getTables()[$tableId] === 0;
+
+                    //Проверка доступа к циклу
+
+                    if (!$this->User->isCreator() && !empty($this->Cycle->getCyclesTable()->getFields()['creator_id']) && in_array(
+                            $this->Cycle->getCyclesTable()->getTableRow()['cycles_access_type'],
+                            [1, 2, 3]
+                        )) {
+                        //Если не связанный пользователь
+                        if (count(array_intersect(
+                                $this->Cycle->getRow()['creator_id']['v'],
+                                $this->User->getConnectedUsers()
+                            )) === 0) {
+                            if ($this->Cycle->getCyclesTable()->getTableRow()['cycles_access_type'] === '3') {
+                                $this->onlyRead = true;
+                            } else {
+                                throw new errorException($this->translate('Access to the cycle is denied.'));
+                            }
+                        }
                     }
 
+                    if ($tableRow = $this->Config->getTableRow($tableId)) {
+                        if ($tableRow['type'] === 'calcs') {
+                            $this->Table = $this->Cycle->getTable($tableRow);
+                        } elseif ($this->tabButton) {
+                            $this->Table = $this->Totum->getTable($tableRow);
+                        } else {
+                            throw new errorException($this->translate('Wrong path to the table'));
+                        }
+
+                    }
                 }
             }
         } elseif ($tableUri && preg_match('/^([a-z0-9_]+)/', $tableUri, $tableMatches)) {
@@ -783,7 +808,6 @@ class TableController extends interfaceController
             $this->CalculateLog = $this->Table->getCalculateLog();
             Conf::$CalcLogs = $this->CalculateLog;
 
-
             /*Для таблиц циклов с одним циклом на пользователя*/
             if ($this->Table->getUser()->isOneCycleTable($this->Table->getTableRow())) {
                 $cyclesCount = $this->Table->getUserCyclesCount();
@@ -791,23 +815,28 @@ class TableController extends interfaceController
                     if (!$actionTable) {
                         throw new errorException('Not correct request. Reload table page');
                     }
-                    $this->Table->reCalculateFromOvers(['add' => []]);
+                    $this->Table->reCalculateFromOvers(['add' => [[]]]);
                     $cyclesCount = 1;
                 }
                 if ($cyclesCount === 1) {
-                    if (!$actionTable) {
-                        throw new errorException('Not correct request. Reload table page');
-                    }
                     $Cycle = $this->Totum->getCycle(
                         $this->Table->getUserCycleId(),
                         $this->Table->getTableRow()['id']
                     );
-                    $calcsTablesIDs = $Cycle->getTableIds();
-                    if (!empty($calcsTablesIDs)) {
-                        foreach ($calcsTablesIDs as $tableId) {
-                            if ($this->Table->getUser()->isTableInAccess($tableId)) {
-                                $this->location($this->modulePath . $this->Table->getTableRow()['top'] . '/' . $this->Table->getTableRow()['id'] . '/' . $Cycle->getId() . '/' . $tableId);
-                                die;
+                    if ($request->getParsedBody()['method'] === 'click' && ($data = json_decode($request->getParsedBody()['data'],
+                            true)) && ($data['item'] ?? '0') == $Cycle->getId() && str_starts_with($data['fieldName'] ?? '',
+                            'tab_')) {
+                        ;
+                    } elseif (!$actionTable) {
+                        throw new errorException('Not correct request. Reload table page');
+                    } else {
+                        $calcsTablesIDs = $Cycle->getTableIds();
+                        if (!empty($calcsTablesIDs)) {
+                            foreach ($calcsTablesIDs as $tableId) {
+                                if ($this->Table->getUser()->isTableInAccess($tableId)) {
+                                    $this->location($this->modulePath . $this->Table->getTableRow()['top'] . '/' . $this->Table->getTableRow()['id'] . '/' . $Cycle->getId() . '/' . $tableId);
+                                    die;
+                                }
                             }
                         }
                     }
@@ -843,6 +872,7 @@ class TableController extends interfaceController
         if (!is_callable([$Actions, $method])) {
             throw new errorException($error);
         }
+        $Actions->unblockServices();
         return $Actions;
     }
 
@@ -870,6 +900,11 @@ class TableController extends interfaceController
                 }
                 return ['text' => $text, 'icon' => 'fa fa-exclamation-triangle'];
             };
+            $addCreatorWarnings = function (array $warnings, &$FullLogs) {
+                foreach ($warnings as $text => $_) {
+                    $FullLogs[] = ['text' => $this->translate('Creator warnings') . ': ' . $this->translate($text), 'icon' => 'fa fa-exclamation-triangle'];
+                }
+            };
 
             if ($types = $this->Totum->getCalculateLog()->getTypes()) {
                 if (in_array('flds', $types) && $this->CalculateLog) {
@@ -887,10 +922,92 @@ class TableController extends interfaceController
                     if ($orderCodeErrors = $this->Totum->getOrderFieldCodeErrors()) {
                         $result['FullLOGS'][] = $addOrderErrors($orderCodeErrors);
                     }
+                    if ($creatorWarnings = $this->Totum->getCreatorWarnings()) {
+                        $addCreatorWarnings($creatorWarnings, $result['FullLOGS']);
+                    }
                 }
-            } elseif ($orderCodeErrors = $this->Totum->getOrderFieldCodeErrors()) {
-                $result['FullLOGS'][] = $addOrderErrors($orderCodeErrors);
+            } else {
+                if ($orderCodeErrors = $this->Totum->getOrderFieldCodeErrors()) {
+                    $result['FullLOGS'][] = $addOrderErrors($orderCodeErrors);
+                }
+                if ($creatorWarnings = $this->Totum->getCreatorWarnings()) {
+                    $addCreatorWarnings($creatorWarnings, $result['FullLOGS']);
+                }
             }
+        }
+    }
+
+    protected function checkIsPreviewFileRequest(ServerRequestInterface $request)
+    {
+        if (!empty($filename = $request->getQueryParams()['docpreview'] ?? null) && !empty($fieldName = $request->getQueryParams()['field'] ?? null) && preg_match('/^[a-z][a-z0-9_]{2,50}$/',
+                $fieldName)) {
+            session_write_close();
+            if (!$this->Table) {
+                $error = $this->translate('The file table was not found.');
+            } else {
+                preg_match('/^(?<table>\d+)_(\d+_)?(\d+_)?(?<field>' . $fieldName . ')(?<hash>_[a-z_0-9]{32,32})?/',
+                    $filename,
+                    $matches);
+                /*Проверка не скормили ли неверный путь*/
+
+                if ($matches['table'] !== (string)$this->Table->getTableRow()['id']
+                    || ($this->Table->getTableRow()['type'] === 'calcs' && (int)$matches[2] !== (int)$this->Table->getCycle()->getId())
+                ) {
+                    $error = $this->translate('The file path is not formed correctly.');
+                } elseif (!($field = $this->Table->getFields()[$fieldName])) {
+                    $error = $this->translate('The file field was not found');
+                } else {
+                    $filepath = File::getFilePath($filename, $this->Config, $field);
+                }
+            }
+            if (!empty($filepath)) {
+                if (!is_file($filepath)) {
+                    $error = $this->translate('The file does not exist on the disk');
+                } else {
+                    if (!preg_match('/\.(docx|xlsx)$/i', $filepath, $ext)) {
+                        $error = $this->translate('Preview is on only for docx/xlsx files');
+                    }
+                    if (is_file($filepath . File::DOC_PREVIEW_POSTFIX)) {
+                        $filepath = $filepath . File::DOC_PREVIEW_POSTFIX;
+                    } else {
+                        $Config = $this->Table->getTotum()->getConfig();
+                        $connector = ServicesConnector::init($Config);
+                        $hash = $Config->getServicesVarObject()->getNewVarnameHash(3600);
+                        $data = [
+                            'file' => base64_encode(file_get_contents($filepath)),
+                            'type' => $ext[1],
+                            'comment' => 'doc file preview'
+                        ];
+
+                        try {
+                            $connector->sendRequest('pdf', $hash, $data);
+                            $hashes[] = $hash;
+
+                            $executes = $Config->getServicesVarObject()->waitVarValues($hashes, true);
+                            if ($executes[$hash]) {
+                                $filepath = $filepath . File::DOC_PREVIEW_POSTFIX;
+                                file_put_contents($filepath, $executes[$hash]);
+                            } else {
+                                $error = 'Preview generating error';
+                            }
+                        } catch (\Exception $e) {
+                            $error = $e->getMessage();
+                        }
+                    }
+                }
+
+                if (empty($error)) {
+                    header('Content-type: application/pdf');
+                    header('Content-Disposition: inline; filename="' . addslashes($request->getQueryParams()['title']) . '"');
+                    readfile($filepath);
+                    die;
+                }
+            }
+            if ($error) {
+                http_response_code(404);
+                echo $error;
+            }
+            die;
         }
     }
 }

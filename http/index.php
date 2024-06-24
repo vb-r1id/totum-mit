@@ -17,6 +17,11 @@ if (!class_exists(Conf::class)) {
     if (is_callable([$Config, 'setHostSchema'])) {
         $Config->setHostSchema($_SERVER['HTTP_HOST']);
     }
+
+    if (preg_match('/^\/ServicesAnswer(\/|\?|$)/', $_SERVER['REQUEST_URI'])) {
+        \totum\common\Services\ServicesConnector::init($Config)->setAnswer(ServerRequest::fromGlobals());
+        die('true');
+    }
     list($module, $lastPath) = $Config->getActivationData($_SERVER['REQUEST_URI']);
 }
 
@@ -27,8 +32,14 @@ if (empty($module)) {
 }
 $controllerClass = 'totum\\moduls\\' . $module . '\\' . $module . 'Controller';
 if (class_exists($controllerClass)) {
-    if($Config && !empty($Config->getHiddenHosts()[$Config->getFullHostName()]) && empty($Config->getHiddenHosts()[$Config->getFullHostName()][$module])){
-        die($Config->getLangObj()->translate('The module is not available for this host.'));
+    if ($Config && !empty($Config->getHiddenHosts()[$Config->getFullHostName()])) {
+        if(empty($Config->getHiddenHosts()[$Config->getFullHostName()][$module])){
+            die($Config->getLangObj()->translate('The module is not available for this host.'));
+        }else{
+            if(is_array($Config->getHiddenHosts()[$Config->getFullHostName()][$module])){
+                $Config->setHiddenHostSettings($Config->getHiddenHosts()[$Config->getFullHostName()][$module]);
+            }
+        }
     }
 
     /*
@@ -44,11 +55,10 @@ if (class_exists($controllerClass)) {
 
 } else {
     if ($Config) {
-        $Lang=$Config->getLangObj();
-    }else{
-        $Lang=(new \totum\common\Lang\EN());
+        $Lang = $Config->getLangObj();
+    } else {
+        $Lang = (new \totum\common\Lang\EN());
     }
     echo $Lang->translate('Not found: %s', [htmlspecialchars($controllerClass)]);
 }
 die;
-?>

@@ -151,7 +151,7 @@ class Conf extends ConfParent{
     
     const db=$dbExport;
     
-    public static \$timeLimit = 120;
+    public static \$timeLimit = 120; //Do not set long time limits, because this limit is used as param of a PostgreSQL transaction. If you set a very long limit — part of your database may be blocked when errors occur.
     
     const adminEmail='{$post['admin_email']}';
     
@@ -159,7 +159,9 @@ class Conf extends ConfParent{
     
     const LANG="{$post['lang']}";
     
-    //protected \$execSSHOn = true;
+    protected \$execSSHOn = 'inner'; //set true if you want to run ssh scripts via execSsh
+    
+    //protected \$checkSSl = true;
     
     /***getSchemas***/
     static function getSchemas()
@@ -174,7 +176,7 @@ class Conf extends ConfParent{
             'path' => '/',
             /*'secure' => true,*/ //-- uncomment this if your totum always on ssl
             'httponly' => true,
-            'samesite' => 'Strict'
+            'samesite' => 'Lax'
         ]);
     }
 }
@@ -407,7 +409,7 @@ CONF;
         $this->updateDataExecCodes(
             $schemaRows,
             $funcCats('all'),
-            $funcRoles('all'),
+            $funcRoles,
             $funcTree('all'),
             'totum_' . $this->Totum->getConfig()->getLang(),
             true
@@ -705,7 +707,7 @@ CONF;
             $this->updateDataExecCodes(
                 $schemaRows,
                 $funcCategories('all'),
-                $funcRoles('all'),
+                $funcRoles,
                 $getTreeId('all'),
                 $matchesName
             );
@@ -926,15 +928,15 @@ CONF;
     }
 
     /**
-     * TODO it
-     *
-     *
      * @param $schemaRows
      * @param array $categoriesMatches
-     * @param array $rolesMatches
+     * @param \Closure $funcRoles
      * @param array $treeMatches
+     * @param $matchName
+     * @param bool $isInstall
+     * @throws errorException
      */
-    public function updateDataExecCodes($schemaRows, array $categoriesMatches, array $rolesMatches, array $treeMatches, $matchName, $isInstall = false)
+    public function updateDataExecCodes($schemaRows, array $categoriesMatches, \Closure $funcRoles, array $treeMatches, $matchName, $isInstall = false)
     {
         $TablesTable = $this->Totum->getTable('tables');
         $TablesTable->addCalculateLogInstance($this->CalculateLog);
@@ -1005,6 +1007,19 @@ CONF;
                                 }
                                 return $selectedRowId ?? null;
                             };
+
+
+                            if ($schemaRow['name'] === 'ttm__user_documentation') {
+                                foreach ($schemaRow['data']['rows'] as &$row) {
+                                    if (!empty($row['for_roles']['v'])) {
+                                        foreach ($row['for_roles']['v'] as &$id) {
+                                            $id = $funcRoles($id);
+                                        }
+                                        unset($id);
+                                    }
+                                }
+                                unset($row);
+                            }
 
                             $before = null;
                             $orderedIds = [];
@@ -1170,7 +1185,7 @@ CONF;
                     [],
                     $TablesTable,
                     'exec',
-                    ['insertedIds' => $insertedIds, 'changedIds' => $changedIds, 'categories' => $categoriesMatches, 'roles' => $rolesMatches, 'tree' => $treeMatches, 'type' => $isInstall ? 'install' : 'update', 'is_table_created' => $schemaRow['isTableCreated']]
+                    ['insertedIds' => $insertedIds, 'changedIds' => $changedIds, 'categories' => $categoriesMatches, 'roles' => $funcRoles('all'), 'tree' => $treeMatches, 'type' => $isInstall ? 'install' : 'update', 'is_table_created' => $schemaRow['isTableCreated']]
                 );
                 $TablesTable->calcLog($Log, 'result', $r);
             }
@@ -1187,7 +1202,7 @@ CONF;
         $matches[$matchName] = [
             'tree' => $treeMatches,
             'categories' => $categoriesMatches,
-            'roles' => $rolesMatches
+            'roles' => $funcRoles('all')
         ];
         $ttmUpdates->reCalculateFromOvers(['modify' => ['params' => ['h_matches' => $matches]]]);
     }
@@ -1223,6 +1238,10 @@ CONF;
                     $categoriesMatches[$id] = $outId;
                     return $categoriesMatches[$id];
                 }
+            }
+
+            if (is_null($cat)) {
+                return null;
             }
 
             throw new errorException($this->translate('Category [[%s]] not found for replacement.', $cat));

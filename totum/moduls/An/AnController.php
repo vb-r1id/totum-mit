@@ -102,6 +102,14 @@ class AnController extends interfaceController
                 $result['links'] = $links;
             }
             if ($panels = $this->Totum->getPanelLinks()) {
+                foreach ($panels as &$panel) {
+                    if(preg_match('~^/Table/\d+/\d+/\d+/~', $panel['uri'])){
+                        $panel['uri'] = str_replace('/Table/', '/An/', $panel['uri']);
+                    }elseif (preg_match('~^/Table/(\d+)/(\d+)/~', $panel['uri'], $matches)){
+                        $panel['uri']=str_replace('/Table/'.$matches[1].'/'.$matches[2].'/', '/An/'.$matches[2], $panel['uri']);
+                    }
+
+                }
                 $result['showPanels'] = $panels;
             }
             if ($links = $this->Totum->getInterfaceDatas()) {
@@ -170,15 +178,19 @@ class AnController extends interfaceController
                 $tableRow = $this->Totum->getTableRow($tableId);
                 $extradata = null;
                 if ($tableRow['type'] === 'calcs') {
-                    $this->__addAnswerVar('error', $this->translate('Access to tables in a cycle through this module is not available.'));
+                    $this->__addAnswerVar('error',
+                        $this->translate('Access to tables in a cycle through this module is not available.'));
                 } else {
                     $this->onlyRead = $this->User->getTables()[$tableId] === 0;
-                    if ($this->isAjax && $tableRow['type']==='tmp' && empty($this->Request->getParsedBody()['tableData']['sess_hash'] ?? null)) {
+                    if ($this->isAjax && $tableRow['type'] === 'tmp' && empty($this->Request->getParsedBody()['tableData']['sess_hash'] ?? null)) {
                         $this->__addAnswerVar('error', $this->translate('Table access error'));
                     } else {
                         $extradata = $this->Request->getParsedBody()['tableData']['sess_hash'] ?? $_GET['sess_hash'] ?? null;
-                        $this->Table = $this->Totum->getTable($tableRow, $extradata);
-                        if ( $tableRow['type']==='tmp' && !$this->isAjax && !$extradata) {
+
+                        $this->Table = $this->Totum->getTable($tableRow,
+                            $tableRow['type'] === 'tmp' ? $extradata : null);
+
+                        if ($tableRow['type'] === 'tmp' && !$this->isAjax && !$extradata) {
                             $add_tbl_data = [];
                             $add_tbl_data['params'] = [];
                             $add_tbl_data['tbl'] = [];

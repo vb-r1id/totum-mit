@@ -3,6 +3,7 @@
 namespace totum\common\calculates;
 
 use \JsonException;
+use totum\common\Crypt;
 use totum\common\errorException;
 use totum\common\Lang\RU;
 
@@ -90,12 +91,30 @@ trait FuncStringsTrait
 
     }
 
+    protected function funcStrUrlDecode(string $params): bool|string
+    {
+        $params = $this->getParamsArray($params);
+        $this->__checkRequiredParams($params, ['str']);
+        $this->__checkNotArrayParams($params, ['str']);
+
+        return urldecode($params['str']);
+    }
+
+    protected function funcStrUrlEncode(string $params): string
+    {
+        $params = $this->getParamsArray($params);
+        $this->__checkRequiredParams($params, ['str']);
+        $this->__checkNotArrayParams($params, ['str']);
+
+        return urlencode($params['str']);
+    }
+
     protected function funcStrBaseDecode(string $params): bool|string
     {
         $params = $this->getParamsArray($params);
-        if (!key_exists('str', $params) || is_array($params['str'])) {
-            throw new errorException($this->translate('Parametr [[%s]] is required and should be a string.', 'str'));
-        }
+        $this->__checkRequiredParams($params, ['str']);
+        $this->__checkNotArrayParams($params, ['str']);
+
         return base64_decode($params['str']);
     }
 
@@ -272,7 +291,45 @@ trait FuncStringsTrait
         $this->__checkRequiredParams($params, ['str', 'from', 'to'], 'strRepeat');
         $this->__checkNotArrayParams($params, ['str'], 'strRepeat');
 
+        if (!is_array($params['from']) && is_array($params['to'])) {
+            throw new errorException($this->translate('The parameter [[%s]] should [[not]] be of type row/list.', ['to if the from not a list']));
+        }
+
+        foreach (['from', 'to'] as $p) {
+            if (is_array($params[$p])) {
+                foreach ($params[$p] as &$f) {
+                    if (is_array($f)) {
+                        $f = json_encode($f, JSON_UNESCAPED_UNICODE);
+                    }
+                }
+                unset($f);
+            }
+        }
+
         return str_replace($params['from'], $params['to'], $params['str']);
+    }
+
+    protected function funcStrTrim(string $params)
+    {
+        $params = $this->getParamsArray($params);
+        $this->__checkRequiredParams($params, ['str'], 'strTrim');
+
+        if (empty($params['str'])) {
+            return $params['str'];
+        }
+
+        if (is_string($params['str'])) {
+            return trim($params['str']);
+        } elseif (is_array($params['str'])) {
+            foreach ($params['str'] as &$v) {
+                if (is_string($v)) {
+                    $v = trim($v);
+                }
+            }
+            unset($v);
+        }
+
+        return $params['str'];
     }
 
     protected function funcStrSplit(string $params): array
@@ -393,10 +450,10 @@ trait FuncStringsTrait
                 ) . '</body>';
         } else {
             return $this->replaceTemplates($mainTemplate,
-                    $params['data'] ?? [],
-                    $getTemplate,
-                    $style,
-                    $usedStyles) ?? '';
+                $params['data'] ?? [],
+                $getTemplate,
+                $style,
+                $usedStyles) ?? '';
         }
     }
 
@@ -563,4 +620,20 @@ trait FuncStringsTrait
         }
         return $value;
     }
+
+    protected function funcStrEncrypt($params)
+    {
+        $params = $this->getParamsArray($params);
+        $this->__checkNotArrayParams($params, ['str']);
+        return Crypt::getCrypted($params['str'], $this->Table->getTotum()->getConfig()->getCryptKeyFileContent());
+    }
+
+    protected function funcStrDecrypt($params)
+    {
+        $params = $this->getParamsArray($params);
+        $this->__checkNotArrayParams($params, ['str']);
+        return Crypt::getDeCrypted($params['str'], $this->Table->getTotum()->getConfig()->getCryptKeyFileContent());
+    }
+
+
 }

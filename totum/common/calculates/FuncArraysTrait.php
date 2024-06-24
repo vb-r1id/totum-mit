@@ -237,7 +237,7 @@ trait FuncArraysTrait
             $filtered = [];
             $nIsRow = false;
 
-            if ((array_keys($list) !== range(0, count($list) - 1))) {
+            if ($params['savekeys'] ?? false || (array_keys($list) !== range(0, count($list) - 1))) {
                 $nIsRow = true;
             }
             foreach ($list as $k => $v) {
@@ -444,6 +444,10 @@ trait FuncArraysTrait
             return [];
         }
 
+        foreach ($params['item'] ?? [] as $item) {
+            $params['list'][] = [$item];
+        }
+
         foreach ($params['list'] as $i => $list) {
             if ($list) {
                 $this->__checkListParam($list, 'list' . (++$i));
@@ -467,10 +471,6 @@ trait FuncArraysTrait
                 }
             }
         }
-        foreach ($params['item'] ?? [] as $item) {
-            $MainList = array_diff($MainList, [$item]);
-        }
-
         return array_values($MainList ?? []);
     }
 
@@ -487,12 +487,12 @@ trait FuncArraysTrait
         if ($params['step'] == 0) {
             throw new errorException($this->translate('The [[%s]] parameter must be [[%s]].', ['step', '!=0']));
         } elseif ($params['step'] > 0) {
-            $list = [$next = $params['min']];
+            $list = [$next = $params['min'] + 0];
             while (($next += $params['step']) < $params['max']) {
                 $list[] = $next;
             }
         } else {
-            $list = [$next = $params['max']];
+            $list = [$next = $params['max'] + 0];
             while (($next += $params['step']) > $params['min']) {
                 $list[] = $next;
             }
@@ -651,7 +651,7 @@ trait FuncArraysTrait
 
 
         if (empty($params['key'])) {
-            $keys = [['value', 1]];
+            $keys = [['value', 1, null]];
         } else {
             $keys = [];
 
@@ -765,6 +765,9 @@ trait FuncArraysTrait
 
         $mainlist = [];
         foreach ($params['list'] as $list) {
+            if (is_null($list) || $list === '') {
+                continue;
+            }
             if (!is_array($list)) {
                 throw new errorException($this->translate('All list elements must be lists.'));
             }
@@ -794,7 +797,42 @@ trait FuncArraysTrait
     {
         $params = $this->getParamsArray($params, ['row', 'field'], ['field']);
 
-        $MainList = [];
+        if (!empty($params['path'])) {
+            $this->__checkListParam($params['path'], 'path');
+            $this->__checkNotEmptyParams($params, ['row']);
+            $this->__checkListParam($params['row'], 'row');
+
+            $MainListMain = array_shift($params['row']);
+
+            $this->__checkListParam($MainListMain, 'first row');
+
+            $MainList = &$MainListMain;
+            foreach ($params['path'] as $k) {
+                if (is_array($k) || is_bool($k)) {
+                    throw new errorException($this->translate('The [[%s]] parameter is not correct.', 'path'));
+                }
+
+                if (!key_exists($k, $MainList)) {
+                    $MainList[$k] = [];
+                }
+                $MainList =& $MainList[$k];
+                if (!is_array($MainList)) {
+                    $MainList = [];
+                }
+            }
+
+            $replace = match ($params['replace'] ?? false) {
+                'true', true => true,
+                default => false
+            };
+
+            if ($replace) {
+                $MainList = [];
+            }
+
+        } else {
+            $MainList = [];
+        }
         foreach ($params['row'] ?? [] as $i => $row) {
             if ($row) {
                 $this->__checkListParam($row, 'row' . (++$i));
@@ -810,6 +848,11 @@ trait FuncArraysTrait
             } else {
                 $MainList[$k] = $v;
             }
+        }
+
+        if (!empty($MainListMain)) {
+            unset($MainList);
+            return $MainListMain;
         }
         return $MainList;
     }
@@ -863,14 +906,25 @@ trait FuncArraysTrait
         $keys = array_unique(array_merge(($params['key'] ?? []), ($params['keys'] ?? [])));
 
         if (!empty($keys) && !empty($params['row'])) {
-            if ($params['recursive'] ?? false) {
-                $remover = function ($row) use (&$remover, $keys) {
-                    foreach ($keys as $key) {
-                        unset($row[$key]);
+            $params['recursive'] = match ($params['recursive'] ?? false) {
+                'false', false => false,
+                'true' => true,
+                default => $params['recursive']
+            };
+
+            if ($params['recursive'] !== false) {
+                if (!is_bool($params['recursive'])) {
+                    $params['recursive'] = (array)$params['recursive'];
+                }
+                $remover = function ($row, $level = 0) use ($params, &$remover, $keys) {
+                    if ($params['recursive'] === true || in_array($level, $params['recursive'])) {
+                        foreach ($keys as $key) {
+                            unset($row[$key]);
+                        }
                     }
                     foreach ($row as $k => $item) {
                         if (is_array($item)) {
-                            $row[$k] = $remover($item);
+                            $row[$k] = $remover($item, ($level + 1));
                         }
                     }
                     return $row;
@@ -904,6 +958,15 @@ trait FuncArraysTrait
                 throw new errorException($this->translate('The number of the [[%s]] must be equal to the number of [[%s]].',
                     ['from', 'to']));
             }
+            $keys1 = array_keys($params['from']);
+            $keys2 = array_keys($params['to']);
+            ksort($keys1);
+            ksort($keys2);
+
+            if ($keys1 !== $keys2) {
+                throw new errorException($this->translate('The [[%s]] must be equal to the [[%s]].',
+                    ['from keys', 'to keys']));
+            }
         }
 
         if (is_array($params['to']) != is_array($params['from'])) {
@@ -911,7 +974,14 @@ trait FuncArraysTrait
                 ['to', 'from']));
         }
 
-        $recursive = $params['recursive'] ?? false;
+        $recursive = match ($params['recursive'] ?? false) {
+            'false', false => false,
+            'true' => true,
+            default => $params['recursive']
+        };
+        if (!is_bool($recursive)) {
+            $recursive = (array)$recursive;
+        }
 
 
         if (is_array($params['from']) && is_array($params['to'])) {
@@ -940,15 +1010,21 @@ trait FuncArraysTrait
         }
 
 
-        $funcReplace = function ($row) use ($recursive, &$funcReplace, &$funcKeyReplace) {
+        $funcReplace = function ($row, $level = 0) use ($recursive, &$funcReplace, &$funcKeyReplace) {
             $rowOut = [];
             foreach ($row as $k => $v) {
                 if ($recursive && is_array($v)) {
-                    $vOut = $funcReplace($v);
+                    $vOut = $funcReplace($v, ($level + 1));
                 } else {
                     $vOut = $v;
                 }
-                $rowOut[$funcKeyReplace($k)] = $vOut;
+                if ($recursive !== false && ($recursive === true || in_array($level, $recursive))) {
+                    $rowOut[$funcKeyReplace($k)] = $vOut;
+                } elseif ($recursive === false && $level === 0) {
+                    $rowOut[$funcKeyReplace($k)] = $vOut;
+                } else {
+                    $rowOut[$k] = $vOut;
+                }
             }
             return $rowOut;
         };

@@ -43,9 +43,16 @@ class Actions
     protected $Request;
 
     protected $modulePath;
+    protected $isServicesBlocked = true;
 
     public $withLog = true;
     protected array $Cookies = [];
+
+
+    public function unblockServices()
+    {
+        $this->isServicesBlocked = false;
+    }
 
     public function __construct(ServerRequestInterface $Request, string $modulePath, aTable $Table = null, Totum $Totum = null)
     {
@@ -58,6 +65,8 @@ class Actions
         $this->Request = $Request;
         $this->post = $Request->getParsedBody();
 
+        $this->chechPostData($this->post);
+
         $this->Cookies = $Request->getCookieParams();
 
         if (!empty($this->post['restoreView'])) {
@@ -67,7 +76,19 @@ class Actions
         $this->modulePath = $modulePath;
     }
 
-    public function reuser()
+    protected function chechPostData($post)
+    {
+        foreach (['onPage', 'pageCount'] as $param) {
+            if (key_exists($param, $post) && $post[$param]) {
+                if (!ctype_digit($post[$param])) {
+                    throw new errorException('Front error message with parametr ' . $param);
+                }
+            }
+        }
+    }
+
+    public
+    function reuser()
     {
         if (!Auth::isCanBeOnShadow($this->User)) {
             throw new errorException($this->translate('The function is not available to you.'));
@@ -83,7 +104,32 @@ class Actions
         return ['ok' => 1];
     }
 
-    public function seachUserTables()
+    public
+    function getReUsers()
+    {
+        if (!Auth::isCanBeOnShadow($this->User)) {
+            throw new errorException($this->translate('The function is not available to you.'));
+        }
+        $q = null;
+        if(!empty($this->post['q']) && is_string($this->post['q'])){
+            $q = $this->post['q'];
+        }
+        $users = Auth::getUsersForShadow($this->Totum->getConfig(), $this->User, q: $q);
+        return ['users' => $users];
+    }
+
+    public function isCreatorView()
+    {
+        return $this->User->isCreator();
+    }
+
+    public function getSchemaFormats()
+    {
+        return ['formats' => ['date' => $this->Totum->getConfig()->getSettings('dates_format') ?? 'd.m.Y'] + ($this->Totum->getConfig()->getSettings('numbers_format') ?? [])];
+    }
+
+    public
+    function seachUserTables()
     {
         $TreeModel = $this->Totum->getNamedModel(Tree::class);
         $q = mb_strtolower($this->post['q'], 'UTF-8');
@@ -137,13 +183,15 @@ class Actions
         return ['tables' => $tables, 'trees' => $tree];
     }
 
-    public function getNotificationsTable()
+    public
+    function getNotificationsTable()
     {
         $Calc = new CalculateAction('=: linkToDataTable(table: \'ttm__manage_notifications\'; title: "' . $this->translate('Notifications') . '"; width: 800; height: "80vh"; refresh: false; header: true; footer: true)');
         $Calc->execAction('KOD', [], [], [], [], $this->Totum->getTable('tables'), 'exec');
     }
 
-    public function loadUserButtons()
+    public
+    function loadUserButtons()
     {
         $result = null;
         $Table = $this->Totum->getTable('settings');
@@ -167,7 +215,8 @@ class Actions
      *
      * @throws errorException
      */
-    public function userButtonsClick()
+    public
+    function userButtonsClick()
     {
         $model = $this->Totum->getModel('_tmp_tables', true);
         $key = ['table_name' => '_panelbuttons', 'user_id' => $this->User->getId(), 'hash' => $this->post['hash'] ?? null];
@@ -202,7 +251,8 @@ class Actions
         return ['ok' => 1];
     }
 
-    public function notificationUpdate()
+    public
+    function notificationUpdate()
     {
         if (!empty($ids = $this->post['id'])) {
 
@@ -251,7 +301,8 @@ class Actions
      *
      * @throws errorException
      */
-    public function linkInputClick()
+    public
+    function linkInputClick()
     {
         $model = $this->Totum->getModel('_tmp_tables', true);
         $key = ['table_name' => '_linkToInput', 'user_id' => $this->User->getId(), 'hash' => $this->post['hash'] ?? null];
@@ -273,9 +324,15 @@ class Actions
                     'multiple' => $data['multiple'] ?? false,
                 ], $Table);
 
-                /*Запрос селекта*/
-                if (key_exists('search', $this->post)) {
-
+                /*Запрос preview*/
+                if (key_exists('preview', $this->post)) {
+                    if (key_exists('val', $this->post)) {
+                        return ['previews' => $Field->getPreviewHtml(['v' => $this->post['val']],
+                            $row,
+                            $this->Table->getTbl())];
+                    }
+                }/*Запрос селекта*/
+                elseif (key_exists('search', $this->post)) {
                     $val = ['v' => $this->post['search']['checkedVals'] ?? (empty($data['multiple']) ? [] : null)];
                     $list = $Field->calculateSelectList($val,
                         $row,
@@ -283,6 +340,7 @@ class Actions
                         $data['vars'] ?? []);
 
                     return $Field->cropSelectListForWeb($list, $val['v'], $this->post['search']['q']);
+
                 } /*Проверка результата*/
                 else {
                     $Field->checkSelectVal('web',
@@ -319,7 +377,8 @@ class Actions
         return ['ok' => 1];
     }
 
-    public function checkForNotifications()
+    public
+    function checkForNotifications()
     {
         /*TODO FOR MY TEST SERVER */
         if ($_SERVER['HTTP_HOST'] === 'localhost:8080') {
@@ -373,15 +432,15 @@ class Actions
             if ($actived) {
                 $result['deactivated'] = [];
                 if ($ids = ($model->getColumn(
-                        'id',
-                        ['id' => $actived, 'user_id' => $this->User->getId(), 'active' => 'false']
-                    ) ?? [])) {
+                    'id',
+                    ['id' => $actived, 'user_id' => $this->User->getId(), 'active' => 'false']
+                ) ?? [])) {
                     $result['deactivated'] = array_merge($result['deactivated'], $ids);
                 }
                 if ($ids = ($model->getColumn(
-                        'id',
-                        ['id' => $actived, 'user_id' => $this->User->getId(), 'active' => 'true', '>active_dt_from' => date('Y-m-d H:i')]
-                    ) ?? [])) {
+                    'id',
+                    ['id' => $actived, 'user_id' => $this->User->getId(), 'active' => 'true', '>active_dt_from' => date('Y-m-d H:i')]
+                ) ?? [])) {
                     $result['deactivated'] = array_merge($result['deactivated'], $ids);
                 }
                 if (empty($result['deactivated'])) {
@@ -422,7 +481,22 @@ class Actions
         die;
     }
 
-    protected function translate(string $str, mixed $vars = []): string
+    protected
+    function loadEnvirement(array $data): array
+    {
+        $Table = $this->Totum->getTable($data['env']['table'], $data['env']['extra'] ?? null);
+
+        $row = [];
+        if (key_exists('id', $data['env'])) {
+            if ($Table->loadFilteredRows('inner', [$data['env']['id']])) {
+                $row = $Table->getTbl()['rows'][$data['env']['id']];
+            }
+        }
+        return [$Table, $row];
+    }
+
+    protected
+    function translate(string $str, mixed $vars = []): string
     {
         return $this->Totum->getLangObj()->translate($str, $vars);
     }

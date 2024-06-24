@@ -85,21 +85,21 @@ echo -e "\e[40;1;37m                            -+*++++++++***+*:               
 echo -e "\e[40;1;37m                            -**+**+***+***+*:                            \033[0m"
 echo -e "\e[40;1;37m                            -******::****:**:                            \033[0m"
 echo -e "\e[40;1;37m                                                                         \033[0m"
-echo -e "\e[43;1;35m- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m   TOTUM AUTOINSTALL SCRIPT                                              \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m   This install script will help you to install Totum online             \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m   on clean Ubuntu 20 with SSL certificate and DKIM.                     \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m   For success you have to \e[43;1;31mDELEGATE A VALID DOMAIN \033[0m\e[43;1;35mto this server.       \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m   If you not shure about you domain — cansel this install and check:    \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;31m   ping YOU_DOMAIN                                                       \033[0m"
-echo -e "\e[43;1;35m                                                                         \033[0m"
-echo -e "\e[43;1;35m- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\033[0m"
+echo -e "\033[43m\033[30m- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m   TOTUM AUTOINSTALL SCRIPT                                              \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m   This install script will help you to install Totum online             \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m   \033[43m\033[31mONLY ON CLEAR!!! Ubuntu 20 \033[43m\033[30mwith SSL certificate and DKIM.             \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m   For success you have to \033[43m\033[31mDELEGATE A VALID DOMAIN \033[43m\033[30mto this server.       \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m   If you not shure about you domain — cansel this install and check:    \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[31m   ping YOU_DOMAIN                                                       \033[0m"
+echo -e "\033[43m\033[30m                                                                         \033[0m"
+echo -e "\033[43m\033[30m- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -\033[0m"
 echo
 
 read -p "If you ready to go, type (A) or cancel (Ctrl + C) and check you domain with ping: " TOTUMRUN
@@ -133,7 +133,8 @@ read -p "Enter domain without http/https delegated! to this server like totum.on
 echo
 echo "1) EN"
 echo "2) RU"
-echo "3) ZH (by snmin)"
+echo "3) ES"
+echo "4) DE"
 echo
 
 read -p "Select language: " TOTUMLANG
@@ -146,7 +147,10 @@ then
   TOTUMLANG=ru
 elif [[ $TOTUMLANG -eq 3 ]]
 then
-  TOTUMLANG=zh
+  TOTUMLANG=es
+elif [[ $TOTUMLANG -eq 4 ]]
+then
+  TOTUMLANG=de
 else
   TOTUMLANG=en
 fi
@@ -187,6 +191,8 @@ else
 echo
   exit 0
 fi
+
+sudo apt update
 
 if [[ $(sudo certbot --version 2>&1 | grep -c 'command not found') -eq 1 ]]
 then
@@ -247,10 +253,10 @@ sudo timedatectl set-timezone $TOTUMTIMEZONE
 
 # Install PHP
 
-sudo apt -y install php8.0 php8.0-bcmath php8.0-cli php8.0-curl php8.0-fpm php8.0-gd php8.0-mbstring php8.0-opcache php8.0-pgsql php8.0-xml php8.0-zip php8.0-soap
+sudo apt -y install php8.0 php8.0-bcmath php8.0-cli php8.0-curl php8.0-fpm php8.0-gd php8.0-mbstring php8.0-opcache php8.0-pgsql php8.0-xml php8.0-zip php8.0-soap php8.0-ldap
 sudo service apache2 stop
 sudo systemctl disable apache2
-sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit-docker/main/nginx_fpm_conf/totum_fpm.conf
+sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit/master/totum/moduls/install/totum_fpm.conf
 sudo chown root:root ./totum_fpm.conf
 sudo mv ./totum_fpm.conf /etc/php/8.0/fpm/pool.d/totum.conf
 sudo sed -i "s:Europe/London:${TOTUMTIMEZONE}:g" /etc/php/8.0/fpm/pool.d/totum.conf
@@ -272,7 +278,7 @@ cd ~
 # Install Nginx
 
 sudo apt -y install nginx
-sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit-docker/main/nginx_fpm_conf/totum_nginx.conf
+sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit/master/totum/moduls/install/totum_nginx.conf
 sudo chown root:root ./totum_nginx.conf
 sudo mv ./totum_nginx.conf /etc/nginx/sites-available/totum.online.conf
 sudo sed -i "s:/var/www/:/home/totum/:g" /etc/nginx/sites-available/totum.online.conf
@@ -298,17 +304,18 @@ sudo -u totum bash -c "/home/totum/totum-mit/bin/totum install --pgdump=pg_dump 
 
 sudo bash -c "echo -e '* * * * * cd /home/totum/totum-mit/ && bin/totum schemas-crons\n*/10 * * * * cd /home/totum/totum-mit/ && bin/totum clean-tmp-dir\n*/10 * * * * cd /home/totum/totum-mit/ && bin/totum clean-schemas-tmp-tables' | crontab -u totum -"
 
+sudo -u totum bash -c "openssl rand -base64 64 > /home/totum/totum-mit/Crypto.key"
 
 # Obtain SSL cert 
 
-sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit-docker/main/certbot/etc_letsencrypt/cli.ini
+sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit/master/totum/moduls/install/cli.ini
 sudo chown root:root ./cli.ini
 sudo mv ./cli.ini /etc/letsencrypt/cli.ini
 
 sudo certbot register --email $CERTBOTEMAIL --agree-tos --no-eff-email
 sudo certbot certonly -d $CERTBOTDOMAIN
 
-sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit-docker/main/nginx_fpm_conf/totum_nginx_SSL.conf
+sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit/master/totum/moduls/install/totum_nginx_SSL.conf
 sudo chown root:root ./totum_nginx_SSL.conf
 sudo mv ./totum_nginx_SSL.conf /etc/nginx/sites-available/totum.online.conf
 
@@ -348,6 +355,7 @@ cd ~
 sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit/master/totum/moduls/install/exim4.conf.template
 sudo chown root:root ./exim4.conf.template
 sudo mv ./exim4.conf.template /etc/exim4/exim4.conf.template
+sudo sed -i "s:your_hostname_here:${CERTBOTDOMAIN}:g" /etc/exim4/exim4.conf.template
 
 sudo curl -O https://raw.githubusercontent.com/totumonline/totum-mit/master/totum/moduls/install/update-exim4.conf.conf
 sudo chown root:root ./update-exim4.conf.conf
